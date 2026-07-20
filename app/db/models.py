@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Date, Integer, String, Boolean, DateTime, ForeignKey, JSON, func
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
 
@@ -35,3 +35,16 @@ class UserProfile(Base):
     interests = Column(JSON, default=list) # Stores a list of strings e.g. ["Python", "AI", "Business"]
     
     user = relationship("User", back_populates="profile")
+
+class DailyFeed(Base):
+    __tablename__ = "daily_feeds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    date = Column(Date, default=func.current_date(), nullable=False)
+    
+    news_summary = Column(String, nullable=False)
+    lesson = Column(String, nullable=False)
+    quiz_data = Column(JSON, nullable=False) # Stores the structured quiz array
+    
+    user = relationship("User")

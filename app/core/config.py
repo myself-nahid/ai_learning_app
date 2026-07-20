@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
 
+    # OpenAI API Key
+    OPENAI_API_KEY: str 
+
     @property
     def ASYNC_DATABASE_URI(self) -> str:
         # Connection string for asyncpg
