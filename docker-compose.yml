@@ -60,5 +60,16 @@ services:
       - db
       - redis
 
+  beat:
+    build: .
+    container_name: ai_celery_beat
+    command: celery -A app.worker.celery_app beat --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
 volumes:
   postgres_data:

@@ -64,3 +64,11 @@ static/
 
 # Ignore uploaded images
 uploads/
+
+# Ignore virtual environment and cache directories
+.venv
+__pycache__
+.env
+.git
+.pytest_cache
+tests

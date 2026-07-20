@@ -9,3 +9,4 @@ python-multipart>=0.0.6
 openai>=1.40.0
 celery>=5.3.6
 redis>=5.0.1
+alembic>=1.12.0
