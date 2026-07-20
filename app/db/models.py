@@ -48,3 +48,22 @@ class DailyFeed(Base):
     quiz_data = Column(JSON, nullable=False) # Stores the structured quiz array
     
     user = relationship("User")
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    daily_feed_id = Column(Integer, ForeignKey("daily_feeds.id"), nullable=False)
+    
+    score = Column(Integer, nullable=False) # e.g., 2 (meaning 2 out of 3 correct)
+    total_questions = Column(Integer, nullable=False)
+    
+    # Store what the user actually submitted to show them later if needed
+    user_answers = Column(JSON, nullable=False) 
+    
+    attempted_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User")
+    daily_feed = relationship("DailyFeed")
