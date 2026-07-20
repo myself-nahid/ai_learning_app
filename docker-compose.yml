@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: ai_postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aishowcase
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    container_name: ai_fastapi_web
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app  # Maps local files to container for live reload
+    environment:
+      # These override the .env file when using Docker Compose
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=aishowcase
+      - POSTGRES_HOST=db  
+      - POSTGRES_PORT=5432
+      - SECRET_KEY=your_super_secret_jwt_key_here_12345
+      - ALGORITHM=HS256
+    depends_on:
+      - db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
