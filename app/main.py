@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 
 from app.api.v1.endpoints import auth, users, content, quizzes
 from app.db.session import engine
-from app.db.models import Base 
+from app.db.models import Base
+from app.schemas.response import StandardResponse
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
