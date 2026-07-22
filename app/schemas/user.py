@@ -23,7 +23,6 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 class UserOnboarding(BaseModel):
-    email: EmailStr  
-    full_name: str
-    difficulty_level: str 
-    interests: List[str]
+    email: EmailStr
+    difficulty_level: str # "beginner", "intermediate", "advanced"
+    interests: List[str]  # ["AI", "Blockchain"]

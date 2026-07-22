@@ -24,49 +24,34 @@ async def signup(
     background_tasks: BackgroundTasks, 
     db: AsyncSession = Depends(get_db)
 ):
-    # 1. Check if the user already exists in the DB
     result = await db.execute(select(User).filter(User.email == user_in.email))
     existing_user = result.scalars().first()
 
     if existing_user:
-        # Case A: User is already verified (This is a real duplicate)
         if existing_user.is_verified:
-            raise HTTPException(
-                status_code=400, 
-                detail="Email already registered and verified. Please login."
-            )
+            raise HTTPException(status_code=400, detail="Email already registered")
         
-        # Case B: User exists but is NOT verified (Your current issue)
-        # We will "reset" this user by updating their password and sending a new OTP
+        # If user exists but not verified, update their name and password
+        existing_user.full_name = user_in.full_name
         existing_user.hashed_password = get_password_hash(user_in.password)
         target_user = existing_user
     else:
-        # Case C: Totally new user
+        # Create new user with full_name
         target_user = User(
+            full_name=user_in.full_name, # Added this
             email=user_in.email, 
             hashed_password=get_password_hash(user_in.password),
             is_verified=False
         )
         db.add(target_user)
     
-    # 2. Flush to ensure the user is in the DB session
-    await db.flush()
-    
-    # 3. Generate a fresh OTP for this signup attempt
-    otp_code = await generate_and_save_otp(db, user_in.email, purpose="signup")
-    
-    # 4. Commit changes
     await db.commit()
 
-    # 5. Send Real Email in Background
-    background_tasks.add_task(
-        send_otp_email, 
-        email=user_in.email, 
-        otp_code=otp_code, 
-        purpose="Signup Verification"
-    )
+    # Generate and send OTP (Real-time email)
+    otp_code = await generate_and_save_otp(db, user_in.email, purpose="signup")
+    background_tasks.add_task(send_otp_email, email=user_in.email, otp_code=otp_code, purpose="Signup Verification")
     
-    return {"message": "Verification code sent! Please check your email to verify your account."}
+    return {"message": "Signup successful! Verification code sent to your email."}
 
 # 2. VERIFY OTP (For Signup)
 @router.post("/verify-otp", response_model=StandardResponse)
