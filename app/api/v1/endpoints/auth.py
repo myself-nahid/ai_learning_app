@@ -18,28 +18,47 @@ from app.services.email_service import generate_and_save_otp, send_otp_email
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # 1. SIGNUP & SEND OTP (Real-time with BackgroundTasks)
-@router.post("/signup", status_code=status.HTTP_201_CREATED, response_model=StandardResponse)
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def signup(
     user_in: UserCreate, 
     background_tasks: BackgroundTasks, 
     db: AsyncSession = Depends(get_db)
 ):
+    # 1. Check if the user already exists in the DB
     result = await db.execute(select(User).filter(User.email == user_in.email))
-    if result.scalars().first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    existing_user = result.scalars().first()
 
-    # Create unverified user
-    new_user = User(email=user_in.email, hashed_password=get_password_hash(user_in.password))
-    db.add(new_user)
-    await db.flush() # Secure the user ID
+    if existing_user:
+        # Case A: User is already verified (This is a real duplicate)
+        if existing_user.is_verified:
+            raise HTTPException(
+                status_code=400, 
+                detail="Email already registered and verified. Please login."
+            )
+        
+        # Case B: User exists but is NOT verified (Your current issue)
+        # We will "reset" this user by updating their password and sending a new OTP
+        existing_user.hashed_password = get_password_hash(user_in.password)
+        target_user = existing_user
+    else:
+        # Case C: Totally new user
+        target_user = User(
+            email=user_in.email, 
+            hashed_password=get_password_hash(user_in.password),
+            is_verified=False
+        )
+        db.add(target_user)
     
-    # Generate OTP
+    # 2. Flush to ensure the user is in the DB session
+    await db.flush()
+    
+    # 3. Generate a fresh OTP for this signup attempt
     otp_code = await generate_and_save_otp(db, user_in.email, purpose="signup")
     
-    # Commit changes
+    # 4. Commit changes
     await db.commit()
 
-    # Send Real Email in Background so the API response is fast
+    # 5. Send Real Email in Background
     background_tasks.add_task(
         send_otp_email, 
         email=user_in.email, 
@@ -47,11 +66,7 @@ async def signup(
         purpose="Signup Verification"
     )
     
-    return StandardResponse(
-        success=True,
-        message="User created. Please check your email for the verification code.",
-        data=None
-    )
+    return {"message": "Verification code sent! Please check your email to verify your account."}
 
 # 2. VERIFY OTP (For Signup)
 @router.post("/verify-otp", response_model=StandardResponse)
