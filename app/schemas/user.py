@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 
 class UserProfileCreate(BaseModel):
@@ -21,3 +21,9 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class UserOnboarding(BaseModel):
+    email: EmailStr  
+    full_name: str
+    difficulty_level: str 
+    interests: List[str]

@@ -106,29 +106,27 @@ async def resend_otp(
 # 4. LOGIN (Modified to check for Onboarding)
 @router.post("/login", response_model=Token)
 async def login(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    # Fetch User along with their Profile
+    # Fetch User + Profile
     result = await db.execute(
-        select(User)
-        .options(selectinload(User.profile)) 
-        .filter(User.email == user_in.email)
+        select(User).options(selectinload(User.profile)).filter(User.email == user_in.email)
     )
     user = result.scalars().first()
 
-    # Credential Check
     if not user or not verify_password(user_in.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    # Verification Check
+    # Check 1: Email Verification
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
 
-    # ONBOARDING CHECK: If profile is None, user hasn't completed onboarding
-    if user.profile is None:
+    # Check 2: Profile Existence (Onboarding)
+    if not user.profile:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
+            status_code=403, 
             detail="First complete onboarding then try to login."
         )
 
+    # Success: Generate Tokens
     return {
         "access_token": create_access_token(user.id),
         "refresh_token": create_refresh_token(user.id),
