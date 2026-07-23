@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # OpenAI API Key
     OPENAI_API_KEY: str 
 
+    # Base URL for the application
+    BASE_URL: str = "http://localhost:8000"
+
     @property
     def ASYNC_DATABASE_URI(self) -> str:
         # Connection string for asyncpg

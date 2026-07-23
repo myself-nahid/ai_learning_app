@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-
+from app.core.config import settings 
 from app.api.deps import get_db, get_current_user
 from app.core.security import get_password_hash, verify_password
 from app.db.models import User, UserProfile
@@ -50,22 +50,27 @@ async def complete_onboarding(
     
     return {"message": "Onboarding complete! You can now log in to your account."}
 
-@router.get("/me", response_model=UserResponse)
-async def get_my_profile(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # Fetch user along with their profile using selectinload
-    result = await db.execute(
-        select(User).options(selectinload(User.profile)).filter(User.id == current_user.id)
-    )
-    user_with_profile = result.scalars().first()
+# @router.get("/me", response_model=UserResponse)
+# async def get_my_profile(
+#     current_user: User = Depends(get_current_user),
+#     db: AsyncSession = Depends(get_db)
+# ):
+#     # Fetch user along with their profile using selectinload
+#     result = await db.execute(
+#         select(User).options(selectinload(User.profile)).filter(User.id == current_user.id)
+#     )
+#     user_with_profile = result.scalars().first()
     
-    return user_with_profile
+#     return user_with_profile
 
 # 1. GET PROFILE INFORMATION (Account Info UI)
 @router.get("/me", response_model=UserProfileResponse)
 async def get_my_profile(current_user: User = Depends(get_current_user)):
+    # If the user has an image, attach the base URL to it
+    if current_user.profile_image:
+        if not current_user.profile_image.startswith("http"):
+            current_user.profile_image = f"{settings.BASE_URL.rstrip('/')}{current_user.profile_image}"
+            
     return current_user
 
 # 2. UPDATE FULL NAME (Edit Profile UI)
@@ -87,7 +92,6 @@ async def upload_profile_image(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Standard production path logic
     UPLOAD_DIR = "uploads/profiles"
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
@@ -98,9 +102,18 @@ async def upload_profile_image(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    current_user.profile_image = f"/static/profiles/{file_name}"
+    # 1. Save the relative path in the database
+    relative_path = f"/static/profiles/{file_name}"
+    current_user.profile_image = relative_path
+    
     await db.commit()
-    return {"image_url": current_user.profile_image}
+    await db.refresh(current_user)
+
+    # 2. Construct the FULL readable URL using .env settings
+    # We use .rstrip("/") to ensure there are no double slashes like "http://url.com//static"
+    full_url = f"{settings.BASE_URL.rstrip('/')}{relative_path}"
+    
+    return {"image_url": full_url}
 
 # 4. UPDATE NOTIFICATION & REMINDER (Daily Reminder UI)
 @router.patch("/update-settings", response_model=UserProfileResponse)
