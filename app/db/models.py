@@ -96,12 +96,12 @@ class NewsArticle(Base):
     headline = Column(String, nullable=False)
     summary = Column(String, nullable=False)
     
-    # Store structured content here (e.g., Key Takeaways, paragraphs, quotes)
+    # Store structured blocks: [{"type": "paragraph", "text": "..."}, {"type": "takeaway", "items": [...]}]
     content_blocks = Column(JSON, nullable=False) 
     
     image_url = Column(String, nullable=True)
-    tag = Column(String, nullable=False) # e.g., "Generative AI", "AI Tools"
-    category = Column(String, nullable=False) # e.g., "Trending", "Research"
+    tag = Column(String, nullable=False) # e.g., "Generative AI"
+    category = Column(String, nullable=False) # e.g., "Tools", "Research", "Trending"
     
     read_time_minutes = Column(Integer, default=3)
     published_at = Column(DateTime, default=datetime.datetime.utcnow)

@@ -2,12 +2,11 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-# --- SUB-COMPONENTS ---
 class DailyPulseSchema(BaseModel):
-    activities_completed: int # e.g., 2
+    activities_completed: int
     total_activities: int = 5
-    progress_percentage: int # e.g., 40
-    estimated_time_left: str # e.g., "5 min left"
+    progress_percentage: int
+    estimated_time_left: str
     check_news: bool
     check_lesson: bool
     check_quiz: bool
@@ -17,28 +16,42 @@ class NewsCardSchema(BaseModel):
     image_url: str
     tag: str
     headline: str
-    summary: Optional[str]
+    summary: str
     read_time_minutes: int
-    time_ago: str # e.g., "2 hours ago"
+    time_ago: str
     is_bookmarked: bool
 
-# Screen 1: Home Dashboard
 class HomeDashboardResponse(BaseModel):
-    greeting: str # e.g., "Good morning, Prayas"
+    greeting: str
     unread_notifications: int
     profile_image: Optional[str]
     daily_pulse: DailyPulseSchema
     todays_news: List[NewsCardSchema]
 
-# Screen 2: News Detail Page
+    class Config:
+        from_attributes = True
+
+class NewsCardResponse(BaseModel):
+    id: int
+    image_url: str
+    tag: str
+    headline: str
+    summary: Optional[str] = None
+    read_time_minutes: int
+    time_ago: str
+    is_bookmarked: bool
+
+    class Config:
+        from_attributes = True
+
 class NewsDetailResponse(BaseModel):
     id: int
     image_url: str
     tag: str
     headline: str
-    date_str: str # e.g., "28 Jun 2026"
+    published_date: str # e.g., "28 Jun 2026"
     read_time_minutes: int
     time_ago: str
-    content_blocks: List[Dict[str, Any]] # Renders Intro, Takeaways, Quotes, etc.
+    content_blocks: List[Any]
     is_bookmarked: bool
-    related_news: List[NewsCardSchema]
+    related_news: List[NewsCardResponse]
