@@ -34,12 +34,27 @@ class UserProfile(Base):
     __tablename__ = "user_profiles"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
-    full_name = Column(String, nullable=True)
-    difficulty_level = Column(String, default="beginner") # beginner, intermediate, advanced
-    interests = Column(JSON, default=list) # Stores a list of strings e.g. ["Python", "AI", "Business"]
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
     
+    primary_interest = Column(String, nullable=False) 
+    ai_level = Column(String, nullable=False) # Beginner, Intermediate, Advanced
+    primary_goal = Column(String, nullable=True) 
+
     user = relationship("User", back_populates="profile")
+
+class UserProgress(Base):
+    __tablename__ = "user_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
+    
+    # Matches Vision Doc (Section 12)
+    current_xp = Column(Integer, default=0)
+    current_streak = Column(Integer, default=0)
+    longest_streak = Column(Integer, default=0)
+    last_completion_date = Column(DateTime, nullable=True)
+    
+    user = relationship("User")
 
 class DailyFeed(Base):
     __tablename__ = "daily_feeds"

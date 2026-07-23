@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from app.core.config import settings 
 from app.api.deps import get_db, get_current_user
 from app.core.security import get_password_hash, verify_password
-from app.db.models import User, UserProfile
+from app.db.models import User, UserProfile, UserProgress
 from app.schemas.user import ChangePasswordRequest, UpdateNameRequest, UpdateSettingsRequest, UserOnboarding, UserProfileCreate, UserProfileResponse, UserResponse
 import os
 import shutil
@@ -15,9 +15,10 @@ router = APIRouter(prefix="/users", tags=["Users & Profile"])
 @router.post("/onboarding")
 async def complete_onboarding(
     data: UserOnboarding,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db) 
+    # Notice: No Depends(get_current_user) here!
 ):
-    # 1. Find user by email
+    # 1. Find user by email provided in the body
     result = await db.execute(
         select(User).options(selectinload(User.profile)).filter(User.email == data.email)
     )
@@ -26,29 +27,21 @@ async def complete_onboarding(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # 2. Security Check: Ensure they are verified before onboarding
+    # 2. Check if verified
     if not user.is_verified:
-        raise HTTPException(
-            status_code=403, 
-            detail="Email not verified. Please verify your email first."
-        )
+        raise HTTPException(status_code=403, detail="Verify email first")
 
-    # 3. Check if profile already exists
-    if user.profile:
-        raise HTTPException(status_code=400, detail="Onboarding already completed.")
-
-    # 4. Create the profile
+    # 3. Create profile... (keep existing logic)
     new_profile = UserProfile(
         user_id=user.id,
-        # full_name=data.full_name,
-        difficulty_level=data.difficulty_level,
-        interests=data.interests
+        primary_interest=data.primary_interest,
+        ai_level=data.ai_level,
+        primary_goal=data.primary_goal
     )
-    
     db.add(new_profile)
     await db.commit()
     
-    return {"message": "Onboarding complete! You can now log in to your account."}
+    return {"message": "Onboarding complete! You can now log in."}
 
 # @router.get("/me", response_model=UserResponse)
 # async def get_my_profile(

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
 from datetime import time, datetime
 
@@ -24,9 +24,16 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 class UserOnboarding(BaseModel):
-    email: EmailStr
-    difficulty_level: str # "beginner", "intermediate", "advanced"
-    interests: List[str]  # ["AI", "Blockchain"]
+    email: EmailStr 
+    primary_interest: str
+    ai_level: str
+    primary_goal: str
+
+# class OnboardingSchema(BaseModel):
+#     primary_interest: str = Field(..., pattern="^(General AI|Business & Leadership|Consulting & Strategy|Finance & Banking|Marketing, Design & Content|Technology & Innovation|Science)$")
+#     ai_level: str = Field(..., pattern="^(Beginner|Intermediate|Advanced)$")
+#     # Field from Vision Doc (often a hidden or secondary screen)
+#     primary_goal: Optional[str] = "Stay informed about AI"
 
 class UserProfileResponse(BaseModel):
     full_name: str
