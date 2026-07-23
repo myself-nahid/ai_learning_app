@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
+from datetime import time, datetime
 
 class UserProfileCreate(BaseModel):
     full_name: str
@@ -26,3 +27,26 @@ class UserOnboarding(BaseModel):
     email: EmailStr
     difficulty_level: str # "beginner", "intermediate", "advanced"
     interests: List[str]  # ["AI", "Blockchain"]
+
+class UserProfileResponse(BaseModel):
+    full_name: str
+    email: EmailStr
+    profile_image: Optional[str]
+    push_notifications: bool
+    daily_reminder_time: time
+    member_since: datetime
+
+    class Config:
+        from_attributes = True
+
+class UpdateNameRequest(BaseModel):
+    full_name: str
+
+class UpdateSettingsRequest(BaseModel):
+    push_notifications: Optional[bool] = None
+    daily_reminder_time: Optional[time] = None
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str

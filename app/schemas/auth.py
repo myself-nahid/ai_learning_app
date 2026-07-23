@@ -12,6 +12,10 @@ class UserCreate(BaseModel):
         if self.password != self.confirm_password:
             raise ValueError("passwords do not match")
         return self
+    
+class UserLogin(BaseModel):
+    email: EmailStr = Field(..., example="nahidhasan@gmail.com")
+    password: str = Field(..., min_length=8)
 
 class Token(BaseModel):
     access_token: str

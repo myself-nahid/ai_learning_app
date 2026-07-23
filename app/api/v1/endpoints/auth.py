@@ -5,13 +5,13 @@ from sqlalchemy.orm import selectinload
 import jwt
 from datetime import datetime
 
-from app.api.deps import get_db 
+from app.api.deps import get_current_user, get_db 
 from app.core.security import (
     get_password_hash, verify_password, 
     create_access_token, create_refresh_token, SECRET_KEY, ALGORITHM
 )
 from app.db.models import User, OTP, UserProfile 
-from app.schemas.auth import UserCreate, Token, OTPVerify, ForgotPassword, ResetPassword
+from app.schemas.auth import UserCreate, Token, OTPVerify, ForgotPassword, ResetPassword, UserLogin
 from app.schemas.response import StandardResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
 
@@ -105,7 +105,7 @@ async def resend_otp(
 
 # 4. LOGIN (Modified to check for Onboarding)
 @router.post("/login", response_model=Token)
-async def login(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
+async def login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
     # Fetch User + Profile
     result = await db.execute(
         select(User).options(selectinload(User.profile)).filter(User.email == user_in.email)
@@ -199,3 +199,7 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
     await db.commit()
 
     return {"message": "Password successfully reset. You can now login."}
+
+@router.post("/logout")
+async def logout(current_user: User = Depends(get_current_user)):
+    return {"message": "Successfully logged out"}

@@ -1,6 +1,6 @@
-from sqlalchemy import Column, Date, Integer, String, Boolean, DateTime, ForeignKey, JSON, func
+from sqlalchemy import Column, Date, Integer, String, Boolean, DateTime, ForeignKey, JSON, Time, func
 from sqlalchemy.orm import declarative_base, relationship
-from datetime import datetime
+import datetime 
 
 Base = declarative_base()
 
@@ -13,7 +13,12 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    profile_image = Column(String, nullable=True) # URL or File Path
+    push_notifications = Column(Boolean, default=True)
+    daily_reminder_time = Column(Time, default=datetime.time(9, 0)) 
+    member_since = Column(DateTime, default=datetime.datetime.utcnow)
 
     profile = relationship("UserProfile", back_populates="user", uselist=False)
 
@@ -62,7 +67,7 @@ class QuizAttempt(Base):
     # Store what the user actually submitted to show them later if needed
     user_answers = Column(JSON, nullable=False) 
     
-    attempted_at = Column(DateTime, default=datetime.utcnow)
+    attempted_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships
     user = relationship("User")

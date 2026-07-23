@@ -28,6 +28,7 @@ services:
       - "8000:8000"
     volumes:
       - .:/app  # Maps local files to container for live reload
+      - ./uploads:/app/uploads 
     environment:
       # These override the .env file when using Docker Compose
       - POSTGRES_USER=postgres
@@ -49,6 +50,7 @@ services:
     command: celery -A app.worker.celery_app worker --loglevel=info
     volumes:
       - .:/app
+      - ./uploads:/app/uploads 
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
