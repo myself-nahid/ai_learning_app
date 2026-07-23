@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1.endpoints import auth, users, content, quizzes, home, learn
+from app.api.v1.endpoints import auth, users, content, quizzes, home, learn, quiz_tab
 from app.db.session import engine
 from app.db.models import Base
 from app.schemas.response import StandardResponse
@@ -41,6 +41,7 @@ app.include_router(content.router, prefix="/api/v1")
 app.include_router(quizzes.router, prefix="/api/v1")
 app.include_router(home.router, prefix="/api/v1")
 app.include_router(learn.router, prefix="/api/v1")
+app.include_router(quiz_tab.router, prefix="/api/v1")
 app.mount("/static", StaticFiles(directory="uploads"), name="static")
 
 @app.get("/")

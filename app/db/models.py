@@ -69,24 +69,24 @@ class DailyFeed(Base):
     
     user = relationship("User")
 
-class QuizAttempt(Base):
-    __tablename__ = "quiz_attempts"
+# class QuizAttempt(Base):
+#     __tablename__ = "quiz_attempts"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    daily_feed_id = Column(Integer, ForeignKey("daily_feeds.id"), nullable=False)
+#     id = Column(Integer, primary_key=True, index=True)
+#     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+#     daily_feed_id = Column(Integer, ForeignKey("daily_feeds.id"), nullable=False)
     
-    score = Column(Integer, nullable=False) # e.g., 2 (meaning 2 out of 3 correct)
-    total_questions = Column(Integer, nullable=False)
+#     score = Column(Integer, nullable=False) # e.g., 2 (meaning 2 out of 3 correct)
+#     total_questions = Column(Integer, nullable=False)
     
-    # Store what the user actually submitted to show them later if needed
-    user_answers = Column(JSON, nullable=False) 
+#     # Store what the user actually submitted to show them later if needed
+#     user_answers = Column(JSON, nullable=False) 
     
-    attempted_at = Column(DateTime, default=datetime.datetime.utcnow)
+#     attempted_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    # Relationships
-    user = relationship("User")
-    daily_feed = relationship("DailyFeed")
+#     # Relationships
+#     user = relationship("User")
+#     daily_feed = relationship("DailyFeed")
 
 # 1. News Articles (Generated daily by your Celery Worker/AI)
 class NewsArticle(Base):
@@ -187,3 +187,54 @@ class WeeklyActivity(Base):
     days_active = Column(JSON, default={"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False})
     total_lessons_this_week = Column(Integer, default=0)
     total_minutes_this_week = Column(Integer, default=0)
+
+# --- QUIZ CONTENT MODELS ---
+
+class QuizSet(Base):
+    __tablename__ = "quiz_sets"
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(String, nullable=False) # e.g., "Robotics", "Generative AI"
+    title = Column(String, nullable=False) # e.g., "Sensors and Perception"
+    description = Column(String)
+    level = Column(String) # e.g., "Beginner"
+    
+    total_questions = Column(Integer, default=10)
+    estimated_minutes = Column(Integer, default=5)
+    xp_reward = Column(Integer, default=10)
+    
+    questions = relationship("QuizQuestion", back_populates="quiz_set")
+
+class QuizQuestion(Base):
+    __tablename__ = "quiz_questions"
+    id = Column(Integer, primary_key=True, index=True)
+    quiz_set_id = Column(Integer, ForeignKey("quiz_sets.id"))
+    
+    question_text = Column(String, nullable=False)
+    # JSON containing {"A": "Anna", "B": "Marek", "C": "Zofia", "D": "None of them"}
+    options = Column(JSON, nullable=False) 
+    correct_option_key = Column(String, nullable=False) # e.g., "A"
+    
+    quiz_set = relationship("QuizSet", back_populates="questions")
+
+# --- USER PROGRESS MODELS ---
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    quiz_set_id = Column(Integer, ForeignKey("quiz_sets.id"), nullable=False)
+    
+    status = Column(String, default="in_progress") # "in_progress", "completed"
+    current_question_index = Column(Integer, default=0) # For "Question 4 of 10"
+    
+    # JSON storing user's answers: {"question_id_1": "A", "question_id_2": "C"}
+    user_answers = Column(JSON, default={}) 
+    
+    score = Column(Integer, default=0)
+    focus_percentage = Column(Integer, default=100) # Provided by frontend
+    duration_seconds = Column(Integer, default=0)
+    
+    started_at = Column(DateTime, default=datetime.datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    quiz_set = relationship("QuizSet")
