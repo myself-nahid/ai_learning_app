@@ -133,3 +133,57 @@ class DailySession(Base):
     is_fully_completed = Column(Boolean, default=False)
 
     user = relationship("User")
+
+# --- COURSE CONTENT MODELS ---
+
+class LearningPath(Base):
+    __tablename__ = "learning_paths"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False) # e.g., "Generative AI Fundamentals"
+    description = Column(String)
+    level = Column(String) # Beginner, Intermediate
+    total_lessons = Column(Integer, default=0)
+    total_minutes = Column(Integer, default=0)
+    image_url = Column(String)
+    
+    lessons = relationship("Lesson", back_populates="path", order_by="Lesson.sequence_order")
+
+class Lesson(Base):
+    __tablename__ = "lessons"
+    id = Column(Integer, primary_key=True, index=True)
+    path_id = Column(Integer, ForeignKey("learning_paths.id"))
+    sequence_order = Column(Integer, nullable=False) # 1, 2, 3 (Used for locking/unlocking)
+    
+    title = Column(String, nullable=False) # e.g., "How AI Models Learn"
+    description = Column(String)
+    estimated_minutes = Column(Integer, default=5)
+    
+    # JSON array containing all cards (Text, Example, Comparison, List, Quiz)
+    cards_data = Column(JSON, nullable=False) 
+    
+    path = relationship("LearningPath", back_populates="lessons")
+
+# --- USER PROGRESS MODELS ---
+
+class UserLessonProgress(Base):
+    __tablename__ = "user_lesson_progress"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    lesson_id = Column(Integer, ForeignKey("lessons.id"), nullable=False)
+    path_id = Column(Integer, ForeignKey("learning_paths.id"), nullable=False)
+    
+    cards_completed = Column(Integer, default=0)
+    status = Column(String, default="locked") # 'locked', 'in_progress', 'completed'
+    last_accessed = Column(DateTime, default=datetime.datetime.utcnow)
+
+class WeeklyActivity(Base):
+    """Tracks the M, T, W, T, F, S, S circles on the Learn Dashboard"""
+    __tablename__ = "weekly_activities"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    week_start_date = Column(DateTime, nullable=False) # The Monday of this week
+    
+    # JSON object storing boolean or lesson counts per day: {"mon": true, "tue": true, ...}
+    days_active = Column(JSON, default={"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False})
+    total_lessons_this_week = Column(Integer, default=0)
+    total_minutes_this_week = Column(Integer, default=0)
