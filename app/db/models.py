@@ -87,3 +87,49 @@ class QuizAttempt(Base):
     # Relationships
     user = relationship("User")
     daily_feed = relationship("DailyFeed")
+
+# 1. News Articles (Generated daily by your Celery Worker/AI)
+class NewsArticle(Base):
+    __tablename__ = "news_articles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    headline = Column(String, nullable=False)
+    summary = Column(String, nullable=False)
+    
+    # Store structured content here (e.g., Key Takeaways, paragraphs, quotes)
+    content_blocks = Column(JSON, nullable=False) 
+    
+    image_url = Column(String, nullable=True)
+    tag = Column(String, nullable=False) # e.g., "Generative AI", "AI Tools"
+    category = Column(String, nullable=False) # e.g., "Trending", "Research"
+    
+    read_time_minutes = Column(Integer, default=3)
+    published_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+# 2. Track User Interactions (Bookmarks and Read status)
+class UserNewsInteraction(Base):
+    __tablename__ = "user_news_interactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    news_id = Column(Integer, ForeignKey("news_articles.id"), nullable=False)
+    
+    is_bookmarked = Column(Boolean, default=False)
+    is_read = Column(Boolean, default=False)
+    read_at = Column(DateTime, nullable=True)
+
+# 3. Update the Daily Feed Tracker (The "Daily Pulse")
+class DailySession(Base):
+    __tablename__ = "daily_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    date = Column(DateTime, default=datetime.datetime.utcnow)
+    assigned_news_ids = Column(JSON, nullable=False) # List of IDs
+    lesson_data = Column(JSON, nullable=True)
+    news_completed = Column(Integer, default=0)
+    lesson_completed = Column(Boolean, default=False)
+    quiz_completed = Column(Boolean, default=False)
+    is_fully_completed = Column(Boolean, default=False)
+
+    user = relationship("User")

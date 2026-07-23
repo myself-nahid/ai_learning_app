@@ -27,17 +27,13 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app  # Maps local files to container for live reload
+      - .:/app
       - ./uploads:/app/uploads 
+    env_file:
+      - .env  # <--- Automatically pulls all variables from your .env file
     environment:
-      # These override the .env file when using Docker Compose
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=aishowcase
       - POSTGRES_HOST=db  
       - POSTGRES_PORT=5432
-      - SECRET_KEY=your_super_secret_jwt_key_here_12345
-      - ALGORITHM=HS256
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - db
@@ -47,31 +43,31 @@ services:
   worker:
     build: .
     container_name: ai_celery_worker
-    command: celery -A app.worker.celery_app worker --loglevel=info
     volumes:
       - .:/app
       - ./uploads:/app/uploads 
+    env_file:
+      - .env  # <--- CRITICAL: This allows the worker to see your REAL OpenAI Key
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=aishowcase
       - POSTGRES_HOST=db
-      - OPENAI_API_KEY=your_key_here
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - db
       - redis
+    command: celery -A app.worker.celery_app worker --loglevel=info
 
   beat:
     build: .
     container_name: ai_celery_beat
-    command: celery -A app.worker.celery_app beat --loglevel=info
     volumes:
       - .:/app
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
+    command: celery -A app.worker.celery_app beat --loglevel=info
 
 volumes:
   postgres_data:

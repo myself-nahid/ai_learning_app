@@ -1,38 +1,65 @@
 from openai import AsyncOpenAI
 from app.core.config import settings
-from app.schemas.ai_content import DailyContent
-from typing import List
+from app.schemas.home import NewsDetailResponse 
+import json
 
-# Initialize Async OpenAI Client
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
-async def generate_daily_learning_content(interests: List[str], difficulty: str) -> DailyContent:
+async def transform_news_to_todai_format(raw_article: dict, category: str):
     """
-    Calls OpenAI to generate the daily news, lesson, and quiz using Structured Outputs.
+    Uses OpenAI to rewrite a raw news article into the TodAI format.
     """
-    
-    # In a real app, you would fetch real news from an API like NewsAPI here.
-    # For now, we instruct the AI to use its latest knowledge.
     prompt = f"""
-    You are an expert AI tutor and news curator. 
-    The user is interested in these topics: {', '.join(interests)}.
-    Their learning difficulty level is: {difficulty}.
+    You are a professional AI news editor for the app 'TodAI'. 
+    Rewrite the following raw news article into a structured, editorial format.
     
-    Please generate today's daily feed for this user containing:
-    1. A brief summary of recent trends or news in those topics.
-    2. A microlearning lesson expanding on one of the concepts mentioned in the news.
-    3. A 3-question interactive quiz to test their knowledge on the lesson.
+    Raw Article Title: {raw_article['title']}
+    Raw Article Description: {raw_article['description']}
+    
+    Return a JSON object with:
+    1. 'headline': A catchy title.
+    2. 'summary': A 2-sentence intro.
+    3. 'tag': A specific tag (e.g., 'Generative AI', 'Robotics').
+    4. 'content_blocks': An array of objects. Blocks should include:
+       - 'paragraph' type
+       - 'takeaways' type (3 key points)
+       - 'quote' type (if relevant)
     """
 
-    # Using gpt-4o-mini for speed and cost-effectiveness
-    response = await client.beta.chat.completions.parse(
+    response = await client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a helpful AI tutor. You must strictly output the requested JSON format."},
-            {"role": "user", "content": prompt}
-        ],
-        response_format=DailyContent, # This forces the exact JSON structure!
+        messages=[{"role": "system", "content": "You output strict JSON."},
+                  {"role": "user", "content": prompt}],
+        response_format={ "type": "json_object" }
     )
     
-    # Return the perfectly formatted Pydantic object
-    return response.choices[0].message.parsed
+    ai_data = json.loads(response.choices[0].message.content)
+    return ai_data
+
+async def generate_lesson_and_quiz(news_headline: str, interest: str, level: str):
+    """
+    Generates a microlearning lesson and a quiz based on the news.
+    """
+    prompt = f"""
+    You are an expert AI tutor for 'TodAI'. 
+    Create a microlearning lesson based on this news: '{news_headline}'.
+    Target Audience: {interest} professional at a {level} level.
+
+    Return a JSON object:
+    1. 'title': Catchy lesson title.
+    2. 'content_blocks': 3 paragraphs explaining the concept.
+    3. 'practical_takeaway': One actionable insight for their career.
+    4. 'quiz': A list of 3 questions. Each question has:
+       - 'question_text'
+       - 'options' (list of 4 strings)
+       - 'correct_option' (the exact string)
+       - 'explanation' (why it's correct)
+    """
+
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": "You output strict JSON."},
+                  {"role": "user", "content": prompt}],
+        response_format={ "type": "json_object" }
+    )
+    return json.loads(response.choices[0].message.content)

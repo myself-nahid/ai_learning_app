@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, DailyFeed
 from app.schemas.ai_content import DailyFeedResponse
-from app.services.ai_service import generate_daily_learning_content
+from app.services.ai_service import transform_news_to_todai_format
 
 router = APIRouter(prefix="/content", tags=["Daily Content"])
 
@@ -40,9 +40,9 @@ async def get_or_create_daily_feed(
 
     # 3. If no feed exists for today, GENERATE IT (Takes 5-15 seconds)
     try:
-        ai_content = await generate_daily_learning_content(
-            interests=user.profile.interests,
-            difficulty=user.profile.difficulty_level
+        ai_content = await transform_news_to_todai_format(
+            raw_article=user.profile.interests,
+            category=user.profile.difficulty_level
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate AI content: {str(e)}")

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Base URL for the application
     BASE_URL: str = "http://localhost:8000"
 
+    # News API Key
+    NEWS_API_KEY: str
+
     @property
     def ASYNC_DATABASE_URI(self) -> str:
         # Connection string for asyncpg
