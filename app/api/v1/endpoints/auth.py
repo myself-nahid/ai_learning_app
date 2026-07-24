@@ -18,7 +18,7 @@ from app.services.email_service import generate_and_save_otp, send_otp_email
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # 1. SIGNUP & SEND OTP (Real-time with BackgroundTasks)
-@router.post("/signup", status_code=status.HTTP_201_CREATED)
+@router.post("/signup", status_code=status.HTTP_201_CREATED, response_model=StandardResponse)
 async def signup(
     user_in: UserCreate, 
     background_tasks: BackgroundTasks, 
@@ -51,9 +51,12 @@ async def signup(
     otp_code = await generate_and_save_otp(db, user_in.email, purpose="signup")
     background_tasks.add_task(send_otp_email, email=user_in.email, otp_code=otp_code, purpose="Signup Verification")
     
-    return {"message": "Signup successful! Verification code sent to your email."}
+    return StandardResponse(
+        success=True,
+        message="Signup successful! Verification code sent to your email."
+    )
 
-# 2. VERIFY OTP (For Signup)
+# 2. VERIFY OTP (Now returns Tokens!)
 @router.post("/verify-otp", response_model=StandardResponse)
 async def verify_otp(data: OTPVerify, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -64,17 +67,32 @@ async def verify_otp(data: OTPVerify, db: AsyncSession = Depends(get_db)):
     if not otp_record or otp_record.expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
 
-    user_result = await db.execute(select(User).filter(User.email == data.email))
+    # Fetch User with Profile to check onboarding status
+    user_result = await db.execute(
+        select(User).options(selectinload(User.profile)).filter(User.email == data.email)
+    )
     user = user_result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
     user.is_verified = True
     
+    extracted_user_id = user.id
+    extracted_is_onboarded = user.profile is not None
+    
     await db.delete(otp_record)
-    await db.commit()
+    await db.commit() # Objects expire here, but we don't care anymore!
 
     return StandardResponse(
         success=True,
-        message="Email successfully verified. You can now proceed to login.",
-        data=None
+        message="Email verified successfully!",
+        data={
+            "access_token": create_access_token(extracted_user_id),
+            "refresh_token": create_refresh_token(extracted_user_id),
+            "token_type": "bearer",
+            "is_onboarded": extracted_is_onboarded
+        }
     )
 
 # 3. RESEND OTP
@@ -103,10 +121,9 @@ async def resend_otp(
         data=None
     )
 
-# 4. LOGIN (Modified to check for Onboarding)
-@router.post("/login", response_model=Token)
+# 4. LOGIN (No longer blocked by Onboarding)
+@router.post("/login", response_model=StandardResponse)
 async def login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
-    # Fetch User + Profile
     result = await db.execute(
         select(User).options(selectinload(User.profile)).filter(User.email == user_in.email)
     )
@@ -115,26 +132,22 @@ async def login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
     if not user or not verify_password(user_in.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    # Check 1: Email Verification
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
 
-    # Check 2: Profile Existence (Onboarding)
-    if not user.profile:
-        raise HTTPException(
-            status_code=403, 
-            detail="First complete onboarding then try to login."
-        )
-
-    # Success: Generate Tokens
-    return {
-        "access_token": create_access_token(user.id),
-        "refresh_token": create_refresh_token(user.id),
-        "token_type": "bearer"
-    }
+    return StandardResponse(
+        success=True,
+        message="Login successful!",
+        data={
+            "access_token": create_access_token(user.id),
+            "refresh_token": create_refresh_token(user.id),
+            "token_type": "bearer",
+            "is_onboarded": user.profile is not None
+        }
+    )
 
 # 5. REFRESH TOKEN (Using PyJWTError)
-@router.post("/refresh", response_model=Token)
+@router.post("/refresh", response_model=StandardResponse)
 async def refresh_token(refresh_token: str):
     try:
         payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -142,11 +155,16 @@ async def refresh_token(refresh_token: str):
             raise HTTPException(status_code=401, detail="Invalid token type")
             
         user_id = payload.get("sub")
-        return {
-            "access_token": create_access_token(user_id),
-            "refresh_token": refresh_token,
-            "token_type": "bearer"
-        }
+        return StandardResponse(
+            success=True,
+            message="Token refreshed successfully!",
+            data={
+                "access_token": create_access_token(user_id),
+                "refresh_token": refresh_token,
+                "token_type": "bearer",
+                "is_onboarded": False
+            }
+        )
     except jwt.PyJWTError: # Updated for PyJWT
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
@@ -198,7 +216,10 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
     await db.delete(otp_record)
     await db.commit()
 
-    return {"message": "Password successfully reset. You can now login."}
+    return StandardResponse(
+        success=True,
+        message="Password successfully reset. You can now login."
+    )
 
 @router.post("/logout")
 async def logout(current_user: User = Depends(get_current_user)):

@@ -24,7 +24,7 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 class UserOnboarding(BaseModel):
-    email: EmailStr 
+    # email: EmailStr
     primary_interest: str
     ai_level: str
     primary_goal: str

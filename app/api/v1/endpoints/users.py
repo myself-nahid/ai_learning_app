@@ -12,36 +12,42 @@ import shutil
 
 router = APIRouter(prefix="/users", tags=["Users & Profile"])
 
-@router.post("/onboarding")
+@router.post("/onboarding", status_code=status.HTTP_201_CREATED)
 async def complete_onboarding(
     data: UserOnboarding,
-    db: AsyncSession = Depends(get_db) 
-    # Notice: No Depends(get_current_user) here!
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user) 
 ):
-    # 1. Find user by email provided in the body
-    result = await db.execute(
-        select(User).options(selectinload(User.profile)).filter(User.email == data.email)
-    )
-    user = result.scalars().first()
+    # 1. Check if profile already exists
+    profile_query = await db.execute(select(UserProfile).filter(UserProfile.user_id == current_user.id))
+    if profile_query.scalars().first():
+        raise HTTPException(status_code=400, detail="Onboarding already completed")
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # 2. Check if verified
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="Verify email first")
-
-    # 3. Create profile... (keep existing logic)
+    # 2. Create User Profile
     new_profile = UserProfile(
-        user_id=user.id,
+        user_id=current_user.id,
         primary_interest=data.primary_interest,
         ai_level=data.ai_level,
         primary_goal=data.primary_goal
     )
+    
+    # 3. Initialize Gamification Progress
+    new_progress = UserProgress(
+        user_id=current_user.id,
+        current_xp=0,
+        current_streak=0,
+        longest_streak=0
+    )
+
     db.add(new_profile)
+    db.add(new_progress)
+    
     await db.commit()
     
-    return {"message": "Onboarding complete! You can now log in."}
+    return {
+        "status": "success",
+        "message": "Personalized feed ready! Welcome to TodAI."
+    }
 
 # @router.get("/me", response_model=UserResponse)
 # async def get_my_profile(
