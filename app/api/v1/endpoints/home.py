@@ -269,24 +269,35 @@ async def toggle_bookmark(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # 1. Look for existing interaction
     int_res = await db.execute(select(UserNewsInteraction).filter(
-        UserNewsInteraction.user_id == current_user.id, UserNewsInteraction.news_id == news_id
+        UserNewsInteraction.user_id == current_user.id, 
+        UserNewsInteraction.news_id == news_id
     ))
     interaction = int_res.scalars().first()
 
     if not interaction:
-        interaction = UserNewsInteraction(user_id=current_user.id, news_id=news_id, is_bookmarked=True)
+        # Create new bookmark
+        interaction = UserNewsInteraction(
+            user_id=current_user.id, 
+            news_id=news_id, 
+            is_bookmarked=True
+        )
         db.add(interaction)
+        final_state = True # We know it's True since we just created it
     else:
+        # Toggle existing bookmark
         interaction.is_bookmarked = not interaction.is_bookmarked
+        final_state = interaction.is_bookmarked
 
+    # 2. Commit the change
     await db.commit()
-    return {"is_bookmarked": interaction.is_bookmarked}
+    # The 'interaction' object is now expired/unreadable, but we have 'final_state'
 
+    # 3. Return the saved variable
+    return {"is_bookmarked": final_state}
 
 from app.worker.tasks import generate_real_daily_content
-
-
 @router.get("/daily-lesson")
 async def get_daily_lesson(
     db: AsyncSession = Depends(get_db),
