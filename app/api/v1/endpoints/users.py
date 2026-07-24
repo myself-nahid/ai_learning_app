@@ -156,3 +156,20 @@ async def get_privacy():
         "title": "Privacy Policy",
         "content": "1. Information We Collect... 1.1 Account Information... 1.2 Learning Data..."
     }
+
+from pydantic import BaseModel
+
+class DeviceTokenRequest(BaseModel):
+    fcm_token: str
+    timezone: str = "UTC"
+
+@router.post("/register-device")
+async def register_device(
+    data: DeviceTokenRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    current_user.fcm_token = data.fcm_token
+    current_user.timezone = data.timezone
+    await db.commit()
+    return {"message": "Device successfully registered for push notifications"}

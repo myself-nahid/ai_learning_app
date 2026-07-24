@@ -101,3 +101,50 @@ async def process_real_daily_pulse_for_all_users():
         
         # Commit all changes to the database
         await db.commit()
+
+from datetime import datetime
+import pytz # Need 'pytz' in requirements.txt for timezone math
+from app.services.notification_service import send_push_notification
+
+@celery_app.task(name="process_daily_reminders")
+def process_daily_reminders():
+    return run_async(send_reminders_async())
+
+async def send_reminders_async():
+    async with SessionLocal() as db:
+        # 1. Get all active users who want notifications and have a token
+        result = await db.execute(
+            select(User).filter(
+                User.is_active == True,
+                User.push_notifications == True,
+                User.fcm_token.isnot(None)
+            )
+        )
+        users = result.scalars().all()
+
+        for user in users:
+            if not user.daily_reminder_time:
+                continue
+
+            # 2. Convert current UTC time to the User's specific Timezone
+            user_tz = pytz.timezone(user.timezone)
+            current_time_in_user_tz = datetime.now(pytz.utc).astimezone(user_tz)
+            
+            # 3. Check if current hour and minute match their setting
+            user_reminder_time = user.daily_reminder_time
+            
+            if (current_time_in_user_tz.hour == user_reminder_time.hour and 
+                current_time_in_user_tz.minute == user_reminder_time.minute):
+                
+                # 4. SEND THE NOTIFICATION!
+                await send_push_notification(
+                    fcm_token=user.fcm_token,
+                    title="Your Daily Pulse is Ready! ⚡",
+                    body="Tap to complete today's 5-minute AI briefing and keep your streak alive.",
+                    data_payload={
+                        # The mobile app intercepts this 'screen' variable 
+                        # and opens the Daily Briefing Sequence instantly.
+                        "screen": "daily_briefing_sequence", 
+                        "action": "start"
+                    }
+                )

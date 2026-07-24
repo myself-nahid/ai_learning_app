@@ -20,6 +20,10 @@ class User(Base):
     daily_reminder_time = Column(Time, default=datetime.time(9, 0)) 
     member_since = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Push Notification Fields
+    fcm_token = Column(String, nullable=True) # The device identifier
+    timezone = Column(String, default="UTC")  # e.g., "Asia/Dhaka", "America/New_York"
+
     profile = relationship("UserProfile", back_populates="user", uselist=False)
 
 class OTP(Base):
