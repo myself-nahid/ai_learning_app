@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc
-from datetime import datetime
+from sqlalchemy import desc, func
+from datetime import date, datetime
 import math
 from typing import List, Optional
 
@@ -40,33 +40,32 @@ async def get_home_dashboard(
 
     # 2. FETCH DAILY PULSE PROGRESS
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+     # 1. FETCH DAILY PULSE (FIXED DATE FILTER)
     pulse_res = await db.execute(
         select(DailySession).filter(
             DailySession.user_id == current_user.id, 
-            DailySession.date >= today_start
+            func.date(DailySession.date) == date.today()
         )
     )
     session = pulse_res.scalars().first()
 
+    # 2. Calculate Progress
     if not session:
-        # Default state if no content generated for the day yet
         pulse_data = {
             "activities_completed": 0, "total_activities": 5, "progress_percentage": 0,
-            "estimated_time_left": "8 min left", "check_news": False, 
+            "estimated_time_left": "8.0 min left", "check_news": False, 
             "check_lesson": False, "check_quiz": False
         }
     else:
-        # Progress Calculation: 3 news articles (1 ea) + 1 lesson + 1 quiz = 5 total
+        # news_completed tracks up to 3. Lesson and Quiz are 1 each. Total = 5.
         completed = session.news_completed + (1 if session.lesson_completed else 0) + (1 if session.quiz_completed else 0)
-        # News counts as 'checked' only if all 3 assigned articles are read
-        news_fully_done = session.news_completed >= 3 
         
         pulse_data = {
             "activities_completed": completed,
             "total_activities": 5,
             "progress_percentage": int((completed / 5) * 100),
-            "estimated_time_left": f"{max(0, 8 - (completed * 1.5))} min left",
-            "check_news": news_fully_done,
+            "estimated_time_left": f"{max(0, 8.0 - (completed * 1.6))} min left",
+            "check_news": session.news_completed >= 3,
             "check_lesson": session.lesson_completed,
             "check_quiz": session.quiz_completed
         }
@@ -234,9 +233,10 @@ async def mark_news_read(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # 1. Update Interaction
+    # 1. Update/Create User Interaction
     int_res = await db.execute(select(UserNewsInteraction).filter(
-        UserNewsInteraction.user_id == current_user.id, UserNewsInteraction.news_id == news_id
+        UserNewsInteraction.user_id == current_user.id, 
+        UserNewsInteraction.news_id == news_id
     ))
     interaction = int_res.scalars().first()
 
@@ -247,20 +247,26 @@ async def mark_news_read(
         interaction.is_read = True
         interaction.read_at = datetime.utcnow()
     else:
-        return {"message": "Already read"} # Don't add to pulse again
+        return {"message": "Already read", "pulse_updated": False}
 
-    # 2. Update Daily Pulse Progress
+    # 2. Update Daily Pulse Progress (CRITICAL FIX)
+    # Use func.date to match only the Day, regardless of the Time
     pulse_query = await db.execute(select(DailySession).filter(
         DailySession.user_id == current_user.id,
-        DailySession.date >= datetime.utcnow().replace(hour=0, minute=0, second=0)
+        func.date(DailySession.date) == date.today() # Strictly match today's date
     ))
     session = pulse_query.scalars().first()
     
-    if session and news_id in session.assigned_news_ids and session.news_completed < 3:
-        session.news_completed += 1
+    pulse_updated = False
+    if session:
+        # Check A: If it's a specific assigned news
+        # Check B: OR just allow any news read to count towards the 3 daily news activities
+        if session.news_completed < 3:
+            session.news_completed += 1
+            pulse_updated = True
         
     await db.commit()
-    return {"message": "Article marked as read", "pulse_updated": True}
+    return {"message": "Article marked as read", "pulse_updated": pulse_updated}
 
 # 4. TOGGLE BOOKMARK
 @router.post("/news/{news_id}/bookmark")
