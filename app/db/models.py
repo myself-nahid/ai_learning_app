@@ -255,3 +255,14 @@ class QuizAttempt(Base):
     completed_at = Column(DateTime, nullable=True)
 
     quiz_set = relationship("QuizSet")
+
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    support_email = Column(String, default="support@todai.app")
+    privacy_policy = Column(String, default="Your privacy policy goes here...")
+    terms_conditions = Column(String, default="Your terms and conditions go here...")
+    account_deletion_policy = Column(String, default="Account deletion instructions...")
+    
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

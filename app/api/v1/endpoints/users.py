@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings 
 from app.api.deps import get_db, get_current_user
 from app.core.security import get_password_hash, verify_password
-from app.db.models import User, UserProfile, UserProgress
+from app.db.models import AppSettings, User, UserProfile, UserProgress
 from app.schemas.user import ChangePasswordRequest, UpdateNameRequest, UpdateSettingsRequest, UserOnboarding, UserProfileCreate, UserProfileResponse, UserResponse
 from app.db.models import NewsArticle, UserNewsInteraction, UserProfile
 from app.schemas.home import NewsCardSchema 
@@ -230,17 +230,21 @@ async def update_preferences(
     }
 
 @router.get("/legal/terms")
-async def get_terms():
+async def get_terms(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(AppSettings).filter(AppSettings.id == 1))
+    app_config = res.scalars().first()
     return {
-        "title": "Terms and Condition",
-        "content": "1. Acceptance of Terms... 2. User Accounts... 3. Use of Application..."
+        "title": "Terms and Conditions",
+        "content": app_config.terms_conditions if app_config else "Coming soon."
     }
 
 @router.get("/legal/privacy")
-async def get_privacy():
+async def get_privacy(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(AppSettings).filter(AppSettings.id == 1))
+    app_config = res.scalars().first()
     return {
         "title": "Privacy Policy",
-        "content": "1. Information We Collect... 1.1 Account Information... 1.2 Learning Data..."
+        "content": app_config.privacy_policy if app_config else "Coming soon."
     }
 
 from pydantic import BaseModel

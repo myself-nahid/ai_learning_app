@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import List
+from typing import List, Optional
 
 class KpiCard(BaseModel):
     value: int
@@ -67,3 +67,27 @@ class AdminUserDetailResponse(BaseModel):
 # ACTION SCHEMAS 
 class SuspendUserRequest(BaseModel):
     suspend: bool # True to suspend, False to reactivate
+
+# ADMIN PROFILE SCHEMAS 
+class AdminProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    new_password: Optional[str] = None # Will hash this if provided
+
+class AdminProfileResponse(BaseModel):
+    full_name: str
+    email: str
+    profile_image: Optional[str]
+
+# APP SETTINGS SCHEMAS 
+class AppSettingsSchema(BaseModel):
+    support_email: str
+    privacy_policy: str
+    terms_conditions: str
+    account_deletion_policy: str
+
+class AppSettingsUpdate(BaseModel):
+    support_email: Optional[str] = None
+    privacy_policy: Optional[str] = None
+    terms_conditions: Optional[str] = None
+    account_deletion_policy: Optional[str] = None

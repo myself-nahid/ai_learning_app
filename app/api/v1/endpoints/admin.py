@@ -7,9 +7,14 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_admin
-from app.db.models import OTP, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress
-from app.schemas.admin import AdminDashboardResponse, AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem, AdminUserListResponse, KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest
+from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress
+from app.schemas.admin import AdminDashboardResponse, AdminProfileResponse, AdminProfileUpdate, AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem, AdminUserListResponse, AppSettingsSchema, AppSettingsUpdate, KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest
 from app.services.email_service import generate_and_save_otp, send_otp_email
+import os
+import shutil
+from fastapi import UploadFile, File
+from app.core.security import get_password_hash
+from app.core.config import settings
 
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
 
@@ -332,3 +337,128 @@ async def delete_user(
     await db.commit()
     
     return {"message": "User account permanently deleted."}
+
+#  ADMIN PROFILE
+@router.get("/profile", response_model=AdminProfileResponse)
+async def get_admin_profile(admin: User = Depends(get_current_admin)):
+    """Fetch current admin details for the settings page."""
+    image_url = admin.profile_image
+    if image_url and not image_url.startswith("http"):
+        image_url = f"{settings.BASE_URL.rstrip('/')}{image_url}"
+        
+    return {
+        "full_name": admin.full_name,
+        "email": admin.email,
+        "profile_image": image_url
+    }
+
+@router.patch("/profile", response_model=AdminProfileResponse)
+async def update_admin_profile(
+    data: AdminProfileUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """Update Admin Name, Email, or Password."""
+    
+    # Check if they are trying to change to an email that already exists
+    if data.email and data.email != admin.email:
+        email_check = await db.execute(select(User).filter(User.email == data.email))
+        if email_check.scalars().first():
+            raise HTTPException(status_code=400, detail="Email is already in use.")
+        admin.email = data.email
+
+    if data.full_name:
+        admin.full_name = data.full_name
+        
+    if data.new_password:
+        admin.hashed_password = get_password_hash(data.new_password)
+        
+    await db.commit()
+    await db.refresh(admin)
+    
+    image_url = admin.profile_image
+    if image_url and not image_url.startswith("http"):
+        image_url = f"{settings.BASE_URL.rstrip('/')}{image_url}"
+        
+    return {
+        "full_name": admin.full_name,
+        "email": admin.email,
+        "profile_image": image_url
+    }
+
+@router.post("/profile/upload-image")
+async def upload_admin_image(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """Upload a new profile picture for the Admin."""
+    UPLOAD_DIR = "uploads/profiles"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    
+    file_extension = file.filename.split(".")[-1]
+    file_name = f"admin_{admin.id}.{file_extension}"
+    file_path = os.path.join(UPLOAD_DIR, file_name)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    relative_path = f"/static/profiles/{file_name}"
+    admin.profile_image = relative_path
+    
+    await db.commit()
+    return {"image_url": f"{settings.BASE_URL.rstrip('/')}{relative_path}"}
+
+# APP SETTINGS
+@router.get("/app-settings", response_model=AppSettingsSchema)
+async def get_app_settings(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """Fetch global app configurations."""
+    res = await db.execute(select(AppSettings).filter(AppSettings.id == 1))
+    app_config = res.scalars().first()
+    
+    if not app_config:
+        # Create default settings if it doesn't exist yet
+        app_config = AppSettings(id=1)
+        db.add(app_config)
+        await db.commit()
+        await db.refresh(app_config)
+        
+    return app_config
+
+@router.patch("/app-settings", response_model=AppSettingsSchema)
+async def update_app_settings(
+    data: AppSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """Update global App Configurations."""
+    res = await db.execute(select(AppSettings).filter(AppSettings.id == 1))
+    app_config = res.scalars().first()
+    
+    if not app_config:
+        app_config = AppSettings(id=1)
+        db.add(app_config)
+
+    # Update only provided fields
+    if data.support_email is not None:
+        app_config.support_email = data.support_email
+    if data.privacy_policy is not None:
+        app_config.privacy_policy = data.privacy_policy
+    if data.terms_conditions is not None:
+        app_config.terms_conditions = data.terms_conditions
+    if data.account_deletion_policy is not None:
+        app_config.account_deletion_policy = data.account_deletion_policy
+
+    # Log action to ActivityLog
+    db.add(ActivityLog(
+        action_type="SETTINGS_UPDATED", 
+        description=f"{admin.full_name} updated the global App Settings."
+    ))
+
+    await db.commit()
+    await db.refresh(app_config)
+    
+    return app_config
