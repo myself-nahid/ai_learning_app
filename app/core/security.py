@@ -39,3 +39,17 @@ def create_refresh_token(subject: Union[str, Any]) -> str:
     expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 15
+
+def create_password_reset_token(subject: Union[str, Any]) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    to_encode = {"exp": expire, "sub": str(subject), "type": "password_reset"}
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> str:
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    if payload.get("type") != "password_reset":
+        raise jwt.PyJWTError("Invalid reset token type")
+    return payload.get("sub")

@@ -4,8 +4,8 @@ from typing import Any
 class UserCreate(BaseModel):
     full_name: str = Field(..., example="Nahid Hasan")
     email: EmailStr = Field(..., example="nahidhasan@gmail.com")
-    password: str = Field(..., min_length=8)
-    confirm_password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=6)
+    confirm_password: str = Field(..., min_length=6)
 
     @model_validator(mode='after')
     def check_passwords_match(self) -> 'UserCreate':
@@ -15,7 +15,7 @@ class UserCreate(BaseModel):
     
 class UserLogin(BaseModel):
     email: EmailStr = Field(..., example="nahidhasan@gmail.com")
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=6)
 
 class Token(BaseModel):
     access_token: str
@@ -31,6 +31,5 @@ class ForgotPassword(BaseModel):
     email: EmailStr
 
 class ResetPassword(BaseModel):
-    email: EmailStr
-    otp_code: str
+    reset_token: str
     new_password: str

@@ -8,7 +8,9 @@ from datetime import datetime
 from app.api.deps import get_current_user, get_db 
 from app.core.security import (
     get_password_hash, verify_password, 
-    create_access_token, create_refresh_token, SECRET_KEY, ALGORITHM
+    create_access_token, create_refresh_token,
+    create_password_reset_token, verify_password_reset_token,
+    SECRET_KEY, ALGORITHM
 )
 from app.db.models import ActivityLog, User, OTP, UserProfile 
 from app.schemas.auth import UserCreate, Token, OTPVerify, ForgotPassword, ResetPassword, UserLogin
@@ -231,26 +233,50 @@ async def forgot_password(
     
     return StandardResponse(
         success=True,
-        message="If that email exists, a reset OTP has been sent.",
+        message="Reset OTP has been sent.",
         data=None
     )
 
-# 7. RESET PASSWORD
-@router.post("/reset-password")
-async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)):
+# 7. VERIFY RESET OTP
+@router.post("/verify-reset-otp", response_model=StandardResponse)
+async def verify_reset_otp(data: OTPVerify, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(OTP).filter(OTP.email == data.email, OTP.otp_code == data.otp_code, OTP.purpose == "reset_password")
+        select(OTP).filter(
+            OTP.email == data.email,
+            OTP.otp_code == data.otp_code,
+            OTP.purpose == "reset_password"
+        )
     )
     otp_record = result.scalars().first()
 
     if not otp_record or otp_record.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+        raise HTTPException(status_code=400, detail="Invalid or expired reset OTP")
 
-    user_result = await db.execute(select(User).filter(User.email == data.email))
+    reset_token = create_password_reset_token(data.email)
+    await db.delete(otp_record)
+    await db.commit()
+
+    return StandardResponse(
+        success=True,
+        message="Reset OTP verified. Use the reset token to update your password.",
+        data={"reset_token": reset_token}
+    )
+
+# 8. RESET PASSWORD
+@router.post("/reset-password", response_model=StandardResponse)
+async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)):
+    try:
+        email = verify_password_reset_token(data.reset_token)
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+
+    user_result = await db.execute(select(User).filter(User.email == email))
     user = user_result.scalars().first()
     
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
     user.hashed_password = get_password_hash(data.new_password)
-    await db.delete(otp_record)
     await db.commit()
 
     return StandardResponse(
