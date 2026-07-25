@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload 
@@ -10,7 +10,7 @@ from app.core.security import (
     get_password_hash, verify_password, 
     create_access_token, create_refresh_token, SECRET_KEY, ALGORITHM
 )
-from app.db.models import User, OTP, UserProfile 
+from app.db.models import ActivityLog, User, OTP, UserProfile 
 from app.schemas.auth import UserCreate, Token, OTPVerify, ForgotPassword, ResetPassword, UserLogin
 from app.schemas.response import StandardResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
@@ -44,6 +44,11 @@ async def signup(
             is_verified=False
         )
         db.add(target_user)
+        log = ActivityLog(
+        action_type="REGISTER", 
+        description=f"{user_in.full_name} registered"
+    )
+    db.add(log)
     
     await db.commit()
 
@@ -177,13 +182,15 @@ async def admin_login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
 
 # 5. REFRESH TOKEN (Using PyJWTError)
 @router.post("/refresh", response_model=StandardResponse)
-async def refresh_token(refresh_token: str):
+async def refresh_token(refresh_token: str = Header(...)):
     try:
         payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Invalid token type")
-            
+
         user_id = payload.get("sub")
+
         return StandardResponse(
             success=True,
             message="Token refreshed successfully!",
@@ -194,7 +201,8 @@ async def refresh_token(refresh_token: str):
                 "is_onboarded": False
             }
         )
-    except jwt.PyJWTError: # Updated for PyJWT
+
+    except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
 # 6. FORGOT PASSWORD

@@ -14,6 +14,8 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     is_superuser = Column(Boolean, default=False)
+    is_suspended = Column(Boolean, default=False) 
+    last_active_at = Column(DateTime, default=datetime.datetime.utcnow) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     profile_image = Column(String, nullable=True) # URL or File Path
@@ -26,6 +28,16 @@ class User(Base):
     timezone = Column(String, default="UTC")  # e.g., "Asia/Dhaka", "America/New_York"
 
     profile = relationship("UserProfile", back_populates="user", uselist=False)
+
+class ActivityLog(Base):
+    """Tracks system events for the Admin Dashboard Recent Activity feed"""
+    __tablename__ = "activity_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Null if anonymous
+    
+    action_type = Column(String, nullable=False) # e.g., "REGISTER", "SUSPEND", "AI_GEN", "AI_FAIL"
+    description = Column(String, nullable=False) # e.g., "User registered"
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class OTP(Base):
     __tablename__ = "otps"

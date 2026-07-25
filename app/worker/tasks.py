@@ -6,7 +6,7 @@ import random
 # Import instances
 from app.worker.celery_app import celery_app
 from app.db.session import SessionLocal
-from app.db.models import User, NewsArticle, DailySession
+from app.db.models import ActivityLog, User, NewsArticle, DailySession
 
 # Import services
 from app.services.news_service import fetch_raw_ai_news
@@ -92,13 +92,27 @@ async def process_real_daily_pulse_for_all_users():
                 )
                 db.add(new_session)
                 
+                success_log = ActivityLog(
+                    user_id=user.id,
+                    action_type="AI_GEN_SUCCESS",
+                    description=f"AI content generated for {user.full_name}"
+                )
+                db.add(success_log)
+                
                 print(f"Successfully generated Daily Pulse for User: {user.email}")
 
             except Exception as e:
                 print(f"Failed to generate content for user {user.id}: {str(e)}")
-                continue # Move to next user if one fails
+                
+                error_log = ActivityLog(
+                    user_id=user.id,
+                    action_type="AI_GEN_FAIL",
+                    description=f"AI generation failed for {user.full_name} — check logs"
+                )
+                db.add(error_log)
+                continue 
         
-        # Commit all changes to the database
+        # Commit all changes (news, sessions, and logs) to the database
         await db.commit()
 
 from datetime import datetime
