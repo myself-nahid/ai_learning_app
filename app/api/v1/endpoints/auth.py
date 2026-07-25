@@ -146,6 +146,35 @@ async def login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
         }
     )
 
+# 2. ADMIN LOGIN ENDPOINT
+@router.post("/admin-login", response_model=StandardResponse)
+async def admin_login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).filter(User.email == user_in.email))
+    user = result.scalars().first()
+
+    # Check standard credentials
+    if not user or not verify_password(user_in.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # STRICT ADMIN CHECK
+    if not user.is_superuser:
+        raise HTTPException(
+            status_code=403, 
+            detail="Access Denied: Only administrators can log in here."
+        )
+
+    # Return tokens for Admin (Admins don't need to do Mobile App Onboarding)
+    return StandardResponse(
+        success=True,
+        message="Admin login successful!",
+        data={
+            "access_token": create_access_token(user.id),
+            "refresh_token": create_refresh_token(user.id),
+            "token_type": "bearer",
+            "is_onboarded": True
+        }
+    )
+
 # 5. REFRESH TOKEN (Using PyJWTError)
 @router.post("/refresh", response_model=StandardResponse)
 async def refresh_token(refresh_token: str):
