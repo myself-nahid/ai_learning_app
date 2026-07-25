@@ -41,7 +41,7 @@ class UserProfile(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True)
     
-    primary_interest = Column(String, nullable=False) 
+    interests = Column(JSON, nullable=False) # e.g., ["General AI", "Science"]
     ai_level = Column(String, nullable=False) # Beginner, Intermediate, Advanced
     primary_goal = Column(String, nullable=True) 
 

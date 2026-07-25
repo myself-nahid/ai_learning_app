@@ -2,7 +2,7 @@ import asyncio
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from datetime import datetime
-
+import random
 # Import instances
 from app.worker.celery_app import celery_app
 from app.db.session import SessionLocal
@@ -44,35 +44,34 @@ async def process_real_daily_pulse_for_all_users():
                 continue
             
             try:
-                # 2. Fetch Real News from NewsAPI based on User Interest
-                # (e.g., query = "AI in Finance & Banking")
-                raw_articles = await fetch_raw_ai_news(user.profile.primary_interest)
+                # 1. Pick a focus for today's news from their list of interests
+                daily_focus = random.choice(user.profile.interests)
+                
+                # 2. Fetch Real News based on that specific focus
+                raw_articles = await fetch_raw_ai_news(daily_focus)
                 
                 if not raw_articles or len(raw_articles) < 1:
-                    print(f"No news found for {user.profile.primary_interest}")
                     continue
                 
-                # 3. Transform the raw news into the TodAI Editorial Format (JSON)
-                # We process the top article for the structured "Main Story"
+                # 3. Transform the raw news
                 ai_news_data = await transform_news_to_todai_format(
                     raw_articles[0], 
-                    user.profile.primary_interest
+                    daily_focus
                 )
                 
-                # 4. Generate Microlearning Lesson & Quiz based on this Headline
-                # This ensures the "Lesson" and "Quiz" buttons in your UI are relevant to the news.
+                # 4. Generate Lesson & Quiz
                 study_material = await generate_lesson_and_quiz(
                     news_headline=ai_news_data['headline'],
-                    interest=user.profile.primary_interest,
+                    interest=daily_focus,
                     level=user.profile.ai_level
                 )
 
-                # 5. Save the transformed news to the database
+                # 5. Save to database using the chosen focus category
                 new_article = NewsArticle(
                     headline=ai_news_data['headline'],
                     summary=ai_news_data['summary'],
                     tag=ai_news_data['tag'],
-                    category=user.profile.primary_interest,
+                    category=daily_focus, 
                     content_blocks=ai_news_data['content_blocks'],
                     image_url=raw_articles[0].get('urlToImage'),
                     published_at=datetime.utcnow()

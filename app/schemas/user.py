@@ -24,8 +24,7 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 class UserOnboarding(BaseModel):
-    # email: EmailStr
-    primary_interest: str
+    interests: List[str] 
     ai_level: str
     primary_goal: str
 
@@ -59,6 +58,6 @@ class ChangePasswordRequest(BaseModel):
     confirm_password: str
 
 class UpdatePreferencesRequest(BaseModel):
-    primary_interest: Optional[str] = Field(None, pattern="^(General AI|Business & Leadership|Consulting & Strategy|Finance & Banking|Marketing, Design & Content|Technology & Innovation|Science)$")
-    ai_level: Optional[str] = Field(None, pattern="^(Beginner|Intermediate|Advanced)$")
+    interests: Optional[List[str]] = None
+    ai_level: Optional[str] = None
     primary_goal: Optional[str] = None

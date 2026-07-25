@@ -31,7 +31,7 @@ async def complete_onboarding(
     # 2. Create User Profile
     new_profile = UserProfile(
         user_id=current_user.id,
-        primary_interest=data.primary_interest,
+        interests=data.interests,
         ai_level=data.ai_level,
         primary_goal=data.primary_goal
     )
@@ -215,8 +215,8 @@ async def update_preferences(
         raise HTTPException(status_code=404, detail="Profile not found. Please complete onboarding first.")
 
     # 2. Update only the fields provided
-    if data.primary_interest:
-        profile.primary_interest = data.primary_interest
+    if data.interests is not None:
+        profile.interests = data.interests
     if data.ai_level:
         profile.ai_level = data.ai_level
     if data.primary_goal:

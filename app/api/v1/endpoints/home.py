@@ -81,8 +81,7 @@ async def get_home_dashboard(
 
     # Apply Filtering Logic per Tab
     if category_tab == "For You":
-        # Filter by the primary interest selected during onboarding
-        query = query.filter(NewsArticle.category == user_with_profile.profile.primary_interest)
+        query = query.filter(NewsArticle.category.in_(user_with_profile.profile.interests))
     elif category_tab == "Trending":
         # In a real app, you'd filter by 'is_trending' flag or high view count
         query = query.limit(10) 
