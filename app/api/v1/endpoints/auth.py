@@ -141,6 +141,12 @@ async def login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
     
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
+    
+    if user.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail="Your account has been suspended. Please contact support."
+        )
 
     return StandardResponse(
         success=True,

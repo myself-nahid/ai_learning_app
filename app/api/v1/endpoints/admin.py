@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, desc, text
+from sqlalchemy import func, desc, or_, text
 from datetime import datetime, timedelta
 
+from sqlalchemy.orm import selectinload
+
 from app.api.deps import get_db, get_current_admin
-from app.db.models import User, ActivityLog, DailySession
-from app.schemas.admin import AdminDashboardResponse, KpiCard, ChartDataPoint, ActivityLogItem
+from app.db.models import OTP, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress
+from app.schemas.admin import AdminDashboardResponse, AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem, AdminUserListResponse, KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest
+from app.services.email_service import generate_and_save_otp, send_otp_email
 
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
 
@@ -98,3 +101,234 @@ async def get_dashboard_overview(
         daily_active_users_chart=dau_chart,
         recent_activity=formatted_logs
     )
+
+
+
+
+# 1. GET ALL USERS (List View)
+@router.get("/users", response_model=AdminUserListResponse)
+async def get_all_users(
+    search: str = "",
+    skip: int = 0,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    query = select(User).options(selectinload(User.profile)).order_by(User.created_at.desc())
+    
+    # Apply Search Filter
+    if search:
+        query = query.filter(
+            or_(User.full_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%"))
+        )
+
+    result = await db.execute(query.offset(skip).limit(limit))
+    users = result.scalars().all()
+
+    # Total count for pagination
+    total_res = await db.execute(select(func.count(User.id)))
+    total_accounts = total_res.scalar()
+
+    formatted_users = []
+    for u in users:
+        # Default fallbacks if profile missing
+        level = u.profile.ai_level if u.profile else "N/A"
+        # Since interests is a JSON list, grab the first one for the UI table
+        interest = u.profile.interests[0] if u.profile and u.profile.interests else "N/A"
+        status = "Suspended" if u.is_suspended else "Active"
+
+        formatted_users.append(AdminUserListItem(
+            id=u.id,
+            full_name=u.full_name,
+            email=u.email,
+            ai_level=level,
+            interest=interest,
+            joined_date=u.created_at.strftime("%d %b %Y"),
+            status=status
+        ))
+
+    return AdminUserListResponse(total_accounts=total_accounts, users=formatted_users)
+
+
+# 2. GET USER DETAILS & STATS
+@router.get("/users/{user_id}", response_model=AdminUserDetailResponse)
+async def get_user_details(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    # Fetch User
+    res = await db.execute(select(User).options(selectinload(User.profile)).filter(User.id == user_id))
+    user = res.scalars().first()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+
+    # Fetch Progress Stats
+    prog_res = await db.execute(select(UserProgress).filter(UserProgress.user_id == user_id))
+    progress = prog_res.scalars().first()
+    streak = f"{progress.current_streak} days" if progress else "0 days"
+
+    # Fetch Lessons Completed
+    les_res = await db.execute(select(func.count(UserLessonProgress.id)).filter(UserLessonProgress.user_id == user_id, UserLessonProgress.status == "completed"))
+    lessons_completed = les_res.scalar() or 0
+
+    # Fetch Quiz Stats
+    quiz_res = await db.execute(select(QuizAttempt).filter(QuizAttempt.user_id == user_id, QuizAttempt.status == "completed"))
+    quizzes = quiz_res.scalars().all()
+    quizzes_completed = len(quizzes)
+    
+    avg_score = 0
+    total_time_seconds = 0
+    if quizzes_completed > 0:
+        # Calculate percentage: (total correct / total questions asked) * 100
+        total_correct = sum(q.score for q in quizzes)
+        total_qs = sum(len(q.user_answers) for q in quizzes)
+        avg_score = int((total_correct / total_qs) * 100) if total_qs > 0 else 0
+        total_time_seconds = sum(q.duration_seconds for q in quizzes)
+
+    # Format Time (e.g. 34h 20m)
+    # Note: In production, add estimated lesson times to total_time_seconds
+    hours, remainder = divmod(total_time_seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    time_str = f"{int(hours)}h {int(minutes)}m"
+
+    # Determine "Last Active" display
+    last_active_str = "Today"
+    if user.last_active_at:
+        diff = datetime.utcnow().date() - user.last_active_at.date()
+        if diff.days > 0:
+            last_active_str = f"{diff.days} days ago"
+
+    return AdminUserDetailResponse(
+        id=user.id,
+        full_name=user.full_name,
+        email=user.email,
+        ai_level=user.profile.ai_level if user.profile else "N/A",
+        interest=user.profile.interests[0] if user.profile and user.profile.interests else "N/A",
+        joined_date=user.created_at.strftime("%d %b %Y"),
+        last_active=last_active_str,
+        status="Suspended" if user.is_suspended else "Active",
+        stats=AdminUserDetailStats(
+            learning_streak=streak,
+            lessons_completed=lessons_completed,
+            quizzes_completed=quizzes_completed,
+            avg_quiz_score=f"{avg_score}%",
+            total_learning_time=time_str
+        )
+    )
+
+# 3. ACTION: SUSPEND / UNSUSPEND USER
+@router.patch("/users/{user_id}/suspend")
+async def toggle_suspend_user(
+    user_id: int, 
+    data: SuspendUserRequest, 
+    db: AsyncSession = Depends(get_db), 
+    admin: User = Depends(get_current_admin)
+):
+    res = await db.execute(select(User).filter(User.id == user_id))
+    user = res.scalars().first()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    if user.is_superuser: raise HTTPException(status_code=403, detail="Cannot suspend an admin")
+
+    user.is_suspended = data.suspend
+    
+    # Audit Log
+    action = "SUSPENDED" if data.suspend else "UNSUSPENDED"
+    db.add(ActivityLog(action_type=action, description=f"{admin.full_name} {action.lower()} account for {user.full_name}"))
+    
+    await db.commit()
+    return {"message": f"User successfully {action.lower()}."}
+
+# 4. ACTION: SEND RESET PASSWORD EMAIL
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_user_password(
+    user_id: int, 
+    background_tasks: BackgroundTasks, 
+    db: AsyncSession = Depends(get_db), 
+    admin: User = Depends(get_current_admin)
+):
+    res = await db.execute(select(User).filter(User.id == user_id))
+    user = res.scalars().first()
+    if not user: 
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target_email = user.email
+    target_name = user.full_name
+    admin_name = admin.full_name
+
+    # Generate OTP (This function calls db.commit() inside, which expires 'user' and 'admin')
+    otp_code = await generate_and_save_otp(db, target_email, purpose="reset_password")
+    
+    # Use the extracted variables safely
+    background_tasks.add_task(send_otp_email, email=target_email, otp_code=otp_code, purpose="Password Reset")
+
+    # Write to activity log safely
+    db.add(ActivityLog(
+        action_type="PWD_RESET_SENT", 
+        description=f"{admin_name} triggered a password reset for {target_name}"
+    ))
+    
+    await db.commit()
+    return {"message": "Password reset email sent to user."}
+
+# 5. ACTION: RESET PROGRESS
+@router.post("/users/{user_id}/reset-progress")
+async def reset_user_progress(
+    user_id: int, 
+    db: AsyncSession = Depends(get_db), 
+    admin: User = Depends(get_current_admin)
+):
+    res = await db.execute(select(User).filter(User.id == user_id))
+    user = res.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Erase all learning history!
+    await db.execute(UserLessonProgress.__table__.delete().where(UserLessonProgress.user_id == user_id))
+    await db.execute(QuizAttempt.__table__.delete().where(QuizAttempt.user_id == user_id))
+    
+    # Reset streak and XP to 0
+    prog_res = await db.execute(select(UserProgress).filter(UserProgress.user_id == user_id))
+    progress = prog_res.scalars().first()
+    if progress:
+        progress.current_streak = 0
+        progress.longest_streak = 0
+        progress.current_xp = 0
+
+    # Now 'user.full_name' works perfectly for the log
+    db.add(ActivityLog(
+        action_type="PROGRESS_RESET", 
+        description=f"{admin.full_name} erased learning progress for {user.full_name}"
+    ))
+    
+    await db.commit()
+    return {"message": "User's progress has been permanently reset."}
+
+# 6. ACTION: DELETE USER
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int, 
+    db: AsyncSession = Depends(get_db), 
+    admin: User = Depends(get_current_admin)
+):
+    res = await db.execute(select(User).filter(User.id == user_id))
+    user = res.scalars().first()
+    if not user: raise HTTPException(status_code=404)
+    if user.is_superuser: raise HTTPException(status_code=403, detail="Cannot delete an admin")
+
+    name = user.full_name # Save for the log
+    
+    # Delete child records safely first
+    await db.execute(UserProfile.__table__.delete().where(UserProfile.user_id == user_id))
+    await db.execute(UserProgress.__table__.delete().where(UserProgress.user_id == user_id))
+    await db.execute(UserLessonProgress.__table__.delete().where(UserLessonProgress.user_id == user_id))
+    await db.execute(QuizAttempt.__table__.delete().where(QuizAttempt.user_id == user_id))
+    await db.execute(OTP.__table__.delete().where(OTP.email == user.email))
+    
+    # Finally, delete user
+    await db.delete(user)
+    
+    db.add(ActivityLog(action_type="USER_DELETED", description=f"{admin.full_name} permanently deleted {name}"))
+    await db.commit()
+    
+    return {"message": "User account permanently deleted."}

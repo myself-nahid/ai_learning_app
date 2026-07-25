@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import List
 
 class KpiCard(BaseModel):
@@ -30,3 +30,40 @@ class AdminDashboardResponse(BaseModel):
     
     # Feed
     recent_activity: List[ActivityLogItem]
+
+# LIST VIEW SCHEMAS 
+class AdminUserListItem(BaseModel):
+    id: int
+    full_name: str
+    email: EmailStr
+    ai_level: str
+    interest: str
+    joined_date: str # e.g. "20 Jul 2026"
+    status: str # "Active" or "Suspended"
+
+class AdminUserListResponse(BaseModel):
+    total_accounts: int
+    users: List[AdminUserListItem]
+
+# DETAIL VIEW SCHEMAS 
+class AdminUserDetailStats(BaseModel):
+    learning_streak: str # e.g. "14 days"
+    lessons_completed: int
+    quizzes_completed: int
+    avg_quiz_score: str # e.g. "78%"
+    total_learning_time: str # e.g. "34h 20m"
+
+class AdminUserDetailResponse(BaseModel):
+    id: int
+    full_name: str
+    email: EmailStr
+    ai_level: str
+    interest: str
+    joined_date: str
+    last_active: str
+    status: str
+    stats: AdminUserDetailStats
+
+# ACTION SCHEMAS 
+class SuspendUserRequest(BaseModel):
+    suspend: bool # True to suspend, False to reactivate
