@@ -57,3 +57,8 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
     confirm_password: str
+
+class UpdatePreferencesRequest(BaseModel):
+    primary_interest: Optional[str] = Field(None, pattern="^(General AI|Business & Leadership|Consulting & Strategy|Finance & Banking|Marketing, Design & Content|Technology & Innovation|Science)$")
+    ai_level: Optional[str] = Field(None, pattern="^(Beginner|Intermediate|Advanced)$")
+    primary_goal: Optional[str] = None
