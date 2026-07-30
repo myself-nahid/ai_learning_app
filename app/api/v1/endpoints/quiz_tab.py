@@ -162,8 +162,8 @@ async def get_quiz_dashboard(
     all_attempts = attempts_res.scalars().all()
     
     completed_attempts = [a for a in all_attempts if a.status == "completed"]
-    total_correct = sum(a.score for a in completed_attempts)
-    total_answered = sum(len(a.user_answers) for a in completed_attempts)
+    total_correct = sum(a.score or 0 for a in completed_attempts)
+    total_answered = sum(len(a.user_answers or {}) for a in completed_attempts)
     
     accuracy = int((total_correct / total_answered) * 100) if total_answered > 0 else 0
     
@@ -322,7 +322,7 @@ async def get_quiz_dashboard(
     for q_set in quiz_sets:
         attempts_for_set = [a for a in all_attempts if a.quiz_set_id == q_set.id]
         completed_att = next((a for a in attempts_for_set if a.status == "completed"), None)
-        latest_att = sorted(attempts_for_set, key=lambda x: x.started_at, reverse=True)[0] if attempts_for_set else None
+        latest_att = sorted(attempts_for_set, key=lambda x: x.started_at or datetime.min, reverse=True)[0] if attempts_for_set else None
 
         if completed_att:
             status = "completed"
