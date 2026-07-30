@@ -241,138 +241,164 @@ async def _ensure_news_learning_path(
     }
 
 
-
-
-def _normalize_lesson_cards(cards_data: Any) -> List[Dict[str, Any]]:
-    if not cards_data:
-        return []
-    if not isinstance(cards_data, list):
-        return []
+def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> List[Dict[str, Any]]:
+    if isinstance(cards_data, str):
+        try:
+            cards_data = json.loads(cards_data)
+        except Exception:
+            cards_data = []
 
     normalized_cards: List[Dict[str, Any]] = []
-    for index, card in enumerate(cards_data, start=1):
-        if not isinstance(card, dict):
-            continue
+    if isinstance(cards_data, list):
+        for index, card in enumerate(cards_data, start=1):
+            if not isinstance(card, dict):
+                continue
 
-        if card.get("cardType"):
-            normalized_cards.append({**card, "id": card.get("id") or f"card_{index}"})
-            continue
+            if card.get("cardType"):
+                normalized_cards.append({**card, "id": card.get("id") or f"card_{index}"})
+                continue
 
-        card_type = str(card.get("type") or card.get("cardType") or "intro").lower()
-        content = card.get("content") if "content" in card else card
+            card_type = str(card.get("type") or card.get("cardType") or "intro").lower()
+            content = card.get("content") if "content" in card else card
+            content_dict = content if isinstance(content, dict) else {}
 
-        if card_type in {"intro", "info", "text"}:
-            payload = content if isinstance(content, dict) else {"text": str(content or "")}
-            title = payload.get("title") or payload.get("heading") or "Introduction"
-            body_text = payload.get("text") or payload.get("body") or ""
-            image_url = payload.get("imageUrl") or payload.get("image_url")
-            normalized_cards.append({
-                "id": f"card_{index}",
+            if card_type in {"intro", "info", "text"}:
+                title = content_dict.get("title") or content_dict.get("heading") or card.get("title") or card.get("heading") or "Introduction"
+                body_text = content_dict.get("text") or content_dict.get("body") or (str(content) if isinstance(content, str) else "")
+                image_url = content_dict.get("imageUrl") or content_dict.get("image_url") or card.get("imageUrl")
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "intro",
+                    "title": title,
+                    "bodyText": body_text,
+                    "imageUrl": image_url,
+                })
+            elif card_type == "example":
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "example",
+                    "title": content_dict.get("heading") or card.get("title") or "Example",
+                    "exampleData": {
+                        "promptPrefix": content_dict.get("promptPrefix") or content_dict.get("prompt") or "Input prompt",
+                        "predictionWord": content_dict.get("predictionWord") or content_dict.get("answer") or "Output prediction",
+                        "noteText": content_dict.get("noteText") or content_dict.get("text") or (str(content) if isinstance(content, str) else ""),
+                    },
+                })
+            elif card_type == "comparison":
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "comparison",
+                    "title": content_dict.get("heading") or card.get("title") or "Comparison",
+                    "comparisonData": {
+                        "traditionalTitle": content_dict.get("traditionalTitle") or "Traditional Approach",
+                        "traditionalBullets": content_dict.get("traditionalBullets") or ["Manual execution", "Rules-based logic"],
+                        "aiTitle": content_dict.get("aiTitle") or "AI Approach",
+                        "aiBullets": content_dict.get("aiBullets") or ["Automated predictions", "Pattern learning"],
+                    },
+                })
+            elif card_type == "list":
+                items = content_dict.get("listItems") or content_dict.get("listData") or card.get("listItems") or []
+                normalized_items = [
+                    (item.get("text") or item.get("label") or str(item)) if isinstance(item, dict) else str(item)
+                    for item in items
+                ]
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "list",
+                    "title": content_dict.get("heading") or card.get("title") or "Key Takeaways",
+                    "listItems": normalized_items or ["Core concepts explained", "Practical applications"],
+                })
+            elif card_type == "steps":
+                items = content_dict.get("stepItems") or content_dict.get("steps") or card.get("stepItems") or []
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "steps",
+                    "title": content_dict.get("heading") or card.get("title") or "How to Apply",
+                    "stepItems": items or ["1. Understand concepts", "2. Practice steps", "3. Evaluate results"],
+                })
+            elif card_type == "quiz":
+                question_text = (
+                    content_dict.get("question")
+                    or card.get("question")
+                    or (str(content) if isinstance(content, str) else "")
+                    or "Knowledge Check"
+                )
+                options = content_dict.get("options") or card.get("options") or []
+                normalized_options = []
+                for opt in options:
+                    if isinstance(opt, dict):
+                        normalized_options.append({
+                            "id": str(opt.get("id") or opt.get("label") or len(normalized_options)),
+                            "label": str(opt.get("label") or opt.get("id") or len(normalized_options)),
+                            "text": str(opt.get("text") or opt.get("label") or "")
+                        })
+                    else:
+                        normalized_options.append({
+                            "id": str(len(normalized_options)),
+                            "label": str(len(normalized_options)),
+                            "text": str(opt)
+                        })
+                if not normalized_options:
+                    normalized_options = [
+                        {"id": "A", "label": "A", "text": "Correct concept application"},
+                        {"id": "B", "label": "B", "text": "Incorrect or irrelevant approach"},
+                    ]
+                correct_ans = (
+                    content_dict.get("correctOptionId")
+                    or content_dict.get("correct_answer")
+                    or card.get("correctOptionId")
+                    or "A"
+                )
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "quiz",
+                    "title": content_dict.get("heading") or card.get("title") or "Check Your Knowledge",
+                    "quizData": {
+                        "question": question_text,
+                        "options": normalized_options,
+                        "correctOptionId": correct_ans,
+                    },
+                })
+            else:
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "intro",
+                    "title": card.get("title") or "Content",
+                    "bodyText": str(content or ""),
+                })
+
+    if not normalized_cards:
+        normalized_cards = [
+            {
+                "id": "card_1",
                 "cardType": "intro",
-                "title": title,
-                "bodyText": body_text,
-                "imageUrl": image_url,
-            })
-        elif card_type == "example":
-            payload = content if isinstance(content, dict) else {"text": str(content or "")}
-            normalized_cards.append({
-                "id": f"card_{index}",
-                "cardType": "example",
-                "title": payload.get("heading") or "Example",
-                "exampleData": {
-                    "promptPrefix": payload.get("promptPrefix") or payload.get("prompt") or "",
-                    "predictionWord": payload.get("predictionWord") or payload.get("answer") or "",
-                    "noteText": payload.get("noteText") or payload.get("text") or "",
-                },
-            })
-        elif card_type == "comparison":
-            payload = content if isinstance(content, dict) else {}
-            normalized_cards.append({
-                "id": f"card_{index}",
-                "cardType": "comparison",
-                "title": payload.get("heading") or "Comparison",
-                "comparisonData": {
-                    "traditionalTitle": payload.get("traditionalTitle") or "Traditional",
-                    "traditionalBullets": payload.get("traditionalBullets") or [],
-                    "aiTitle": payload.get("aiTitle") or "AI",
-                    "aiBullets": payload.get("aiBullets") or [],
-                },
-            })
-        elif card_type == "list":
-            payload = content if isinstance(content, dict) else {}
-            items = payload.get("listItems") or payload.get("listData") or []
-            normalized_items = []
-            for item in items:
-                if isinstance(item, dict):
-                    normalized_items.append(item.get("text") or item.get("label") or "")
-                else:
-                    normalized_items.append(str(item))
-            normalized_cards.append({
-                "id": f"card_{index}",
-                "cardType": "list",
-                "title": payload.get("heading") or "Key Points",
-                "listItems": normalized_items,
-            })
-        elif card_type == "steps":
-            payload = content if isinstance(content, dict) else {}
-            items = payload.get("stepItems") or payload.get("steps") or []
-            normalized_cards.append({
-                "id": f"card_{index}",
+                "title": lesson_title,
+                "bodyText": f"Welcome to {lesson_title}! In this lesson, you will learn key concepts and practical applications.",
+            },
+            {
+                "id": "card_2",
                 "cardType": "steps",
-                "title": payload.get("heading") or "Steps",
-                "stepItems": items,
-            })
-        elif card_type == "quiz":
-            payload = content if isinstance(content, dict) else {}
-            content_dict = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-            question_text = (
-                payload.get("question")
-                or content_dict.get("question")
-                or (str(payload.get("content")) if isinstance(payload.get("content"), str) else "")
-                or ""
-            )
-            options = payload.get("options") or content_dict.get("options") or []
-            normalized_options = []
-            for option in options:
-                if isinstance(option, dict):
-                    normalized_options.append({
-                        "id": option.get("id") or option.get("label") or "",
-                        "label": option.get("label") or option.get("id") or "",
-                        "text": option.get("text") or option.get("label") or "",
-                    })
-                else:
-                    normalized_options.append({
-                        "id": str(len(normalized_options)),
-                        "label": str(len(normalized_options)),
-                        "text": str(option)
-                    })
-
-            correct_ans = (
-                payload.get("correctOptionId")
-                or payload.get("correct_answer")
-                or payload.get("correctOption")
-                or payload.get("correct_option_key")
-                or content_dict.get("correct_answer")
-                or ""
-            )
-
-            normalized_cards.append({
-                "id": f"card_{index}",
+                "title": f"Key Steps for {lesson_title}",
+                "stepItems": [
+                    "1. Read the core principles carefully.",
+                    "2. Connect ideas to real-world tasks.",
+                    "3. Test your understanding with practice.",
+                ],
+            },
+            {
+                "id": "card_3",
                 "cardType": "quiz",
-                "title": payload.get("heading") or content_dict.get("heading") or "Check Your Knowledge",
+                "title": "Knowledge Check",
                 "quizData": {
-                    "question": question_text,
-                    "options": normalized_options,
-                    "correctOptionId": correct_ans,
+                    "question": f"What is the main goal of {lesson_title}?",
+                    "options": [
+                        {"id": "A", "label": "A", "text": "To build practical knowledge and skills"},
+                        {"id": "B", "label": "B", "text": "To skip foundational learning"},
+                    ],
+                    "correctOptionId": "A",
                 },
-            })
-        else:
-            normalized_cards.append({
-                "id": f"card_{index}",
-                "cardType": "intro",
-                "title": "Content",
-                "bodyText": str(content or ""),
-            })
+            },
+        ]
 
     return normalized_cards
 
@@ -720,7 +746,8 @@ async def get_lesson_content(
         print(f"Warning: Failed to update UserLessonProgress in get_lesson_content: {e}")
         await db.rollback()
 
-    total_cards = len(lesson.cards_data) if lesson.cards_data else 0
+    normalized = _normalize_lesson_cards(lesson.cards_data, lesson.title)
+    total_cards = len(normalized)
 
     return {
         "lesson_id": lesson.id,
@@ -729,7 +756,7 @@ async def get_lesson_content(
         "estimated_minutes": lesson.estimated_minutes or 5,
         "total_cards": total_cards,
         "cards_completed": cards_done,
-        "cards": _normalize_lesson_cards(lesson.cards_data)
+        "cards": normalized,
     }
 
 # 4. SAVE CARD PROGRESS (As user taps "Continue")
