@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, date
 import math
+import json
 from typing import Any, Dict, List, Optional
 
 from app.api.deps import get_db, get_current_user
