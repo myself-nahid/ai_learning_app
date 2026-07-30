@@ -160,6 +160,7 @@ async def _ensure_news_learning_path(
     Returns a dict with real path_id, lesson_id, and derived metadata.
     Never returns path_id=0 or lesson_id=0.
     """
+    headline = (article.headline or "").strip()
     topic_label = _normalize_topic_label(article.category or article.tag or headline)
     short_headline = _shorten_title(headline, 50)
     display_title = short_headline if topic_label.lower() in short_headline.lower() else f"{topic_label}: {short_headline}"
