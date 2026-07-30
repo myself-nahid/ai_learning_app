@@ -194,6 +194,7 @@ async def _ensure_news_learning_path(
                 "level": existing_path.level or "Beginner",
                 "total_lessons": actual_total_lessons,
                 "total_minutes": actual_total_minutes,
+                "total_cards": actual_total_cards,
                 "image_url": image_url,
                 "description": description,
             }
@@ -234,6 +235,7 @@ async def _ensure_news_learning_path(
         "level": "Beginner",
         "total_lessons": 1,
         "total_minutes": estimated_minutes,
+        "total_cards": total_cards,
         "image_url": image_url,
         "description": description,
     }
