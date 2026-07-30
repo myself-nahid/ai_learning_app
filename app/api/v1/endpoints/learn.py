@@ -33,17 +33,11 @@ def _shorten_title(title: Optional[str], max_length: int = 60) -> str:
 
 def _normalize_topic_label(topic: Optional[str]) -> str:
     if not topic:
-        return "Today's topic"
-    normalized = topic.strip().lower()
-    if any(k in normalized for k in ["ai", "generative", "llm", "model"]):
-        return "Generative AI"
-    if any(k in normalized for k in ["productivity", "workflow", "tool", "software", "app", "notes"]):
-        return "Productivity Tools"
-    if any(k in normalized for k in ["health", "medical", "medicine", "doctor"]):
-        return "Health & AI"
-    if any(k in normalized for k in ["finance", "business", "market", "economy"]):
-        return "Business & AI"
-    return topic.strip()
+        return "Featured News"
+    cleaned = " ".join(topic.strip().split())
+    if not cleaned:
+        return "Featured News"
+    return cleaned.title() if cleaned.islower() else cleaned
 
 
 def _build_lesson_cards_from_article(article: "NewsArticle") -> List[Dict[str, Any]]:
@@ -53,7 +47,7 @@ def _build_lesson_cards_from_article(article: "NewsArticle") -> List[Dict[str, A
     """
     headline = (article.headline or "").strip()
     summary = (article.summary or "").strip()
-    topic_label = _normalize_topic_label(article.tag or article.category or headline)
+    topic_label = _normalize_topic_label(article.category or article.tag or headline)
     image_url = article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop"
     content_blocks = article.content_blocks or []
 
@@ -166,8 +160,7 @@ async def _ensure_news_learning_path(
     Returns a dict with real path_id, lesson_id, and derived metadata.
     Never returns path_id=0 or lesson_id=0.
     """
-    headline = (article.headline or "").strip()
-    topic_label = _normalize_topic_label(article.tag or article.category or headline)
+    topic_label = _normalize_topic_label(article.category or article.tag or headline)
     short_headline = _shorten_title(headline, 50)
     display_title = short_headline if topic_label.lower() in short_headline.lower() else f"{topic_label}: {short_headline}"
     image_url = article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop"
