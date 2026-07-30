@@ -220,7 +220,7 @@ async def get_quiz_dashboard(
     continue_quiz = None
     # Priority 1: Resume an in_progress attempt
     if in_progress:
-        latest = sorted(in_progress, key=lambda x: x.started_at, reverse=True)[0]
+        latest = sorted(in_progress, key=lambda x: x.started_at or datetime.min, reverse=True)[0]
         set_res = await db.execute(select(QuizSet).filter(QuizSet.id == latest.quiz_set_id))
         q_set = set_res.scalars().first()
 
