@@ -685,37 +685,42 @@ async def get_lesson_content(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
     
-    prog_res = await db.execute(
-        select(UserLessonProgress).filter(
-            UserLessonProgress.user_id == current_user.id, 
-            UserLessonProgress.lesson_id == lesson_id
+    cards_done = 0
+    try:
+        prog_res = await db.execute(
+            select(UserLessonProgress).filter(
+                UserLessonProgress.user_id == current_user.id, 
+                UserLessonProgress.lesson_id == lesson_id
+            )
         )
-    )
-    progs = prog_res.scalars().all()
-    now = datetime.utcnow()
+        progs = prog_res.scalars().all()
+        now = datetime.utcnow()
 
-    if not progs:
-        progress = UserLessonProgress(
-            user_id=current_user.id, 
-            lesson_id=lesson.id, 
-            path_id=lesson.path_id, 
-            cards_completed=0,
-            status="in_progress",
-            last_accessed=now,
-        )
-        db.add(progress)
-    else:
-        progress = progs[0]
-        progress.last_accessed = now
-        if not progress.path_id and lesson.path_id:
-            progress.path_id = lesson.path_id
-        if progress.status != "completed":
-            progress.status = "in_progress"
+        if not progs:
+            progress = UserLessonProgress(
+                user_id=current_user.id, 
+                lesson_id=lesson.id, 
+                path_id=lesson.path_id, 
+                cards_completed=0,
+                status="in_progress",
+                last_accessed=now,
+            )
+            db.add(progress)
+        else:
+            progress = progs[0]
+            progress.last_accessed = now
+            if not progress.path_id and lesson.path_id:
+                progress.path_id = lesson.path_id
+            if progress.status != "completed":
+                progress.status = "in_progress"
 
-    await db.commit()
+        await db.commit()
+        cards_done = progress.cards_completed if (progress and progress.cards_completed is not None) else 0
+    except Exception as e:
+        print(f"Warning: Failed to update UserLessonProgress in get_lesson_content: {e}")
+        await db.rollback()
 
     total_cards = len(lesson.cards_data) if lesson.cards_data else 0
-    cards_done = progress.cards_completed if (progress and progress.cards_completed is not None) else 0
 
     return {
         "lesson_id": lesson.id,
