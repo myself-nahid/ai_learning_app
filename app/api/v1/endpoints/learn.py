@@ -430,7 +430,7 @@ async def get_learn_dashboard(
     completed_lesson_ids = {prog.lesson_id for prog in all_progress if prog.status == "completed"}
 
     # ── Continue Learning ────────────────────────────────────────────────────
-    # Priority 1: Most recently accessed in_progress lesson
+    # Priority 1: Most recently accessed in_progress lesson (with status != completed)
     active_progress = None
     for prog in sorted(all_progress, key=lambda x: x.last_accessed or datetime.min, reverse=True):
         if prog.status == "in_progress" and prog.lesson_id not in completed_lesson_ids:
@@ -441,8 +441,11 @@ async def get_learn_dashboard(
     if active_progress:
         lesson_res = await db.execute(select(Lesson).filter(Lesson.id == active_progress.lesson_id))
         lesson = lesson_res.scalars().first()
-        path_res = await db.execute(select(LearningPath).filter(LearningPath.id == active_progress.path_id))
-        path = path_res.scalars().first()
+        target_path_id = active_progress.path_id or (lesson.path_id if lesson else None)
+        path = None
+        if target_path_id:
+            path_res = await db.execute(select(LearningPath).filter(LearningPath.id == target_path_id))
+            path = path_res.scalars().first()
 
         if lesson and path:
             total_cards = len(lesson.cards_data) if lesson.cards_data else 1
@@ -459,23 +462,27 @@ async def get_learn_dashboard(
                 "image_url": path.image_url,
             }
 
-    # Priority 2: First news-derived path's first lesson (real IDs from DB)
+    # Priority 2: First news-derived path's lesson if uncompleted
     if not continue_learning and news_path_contexts:
-        ctx = news_path_contexts[0]
-        # Get the actual lesson to read real card count
-        lesson_res = await db.execute(select(Lesson).filter(Lesson.id == ctx["lesson_id"]))
-        lesson = lesson_res.scalars().first()
-        total_cards = len(lesson.cards_data) if (lesson and lesson.cards_data) else 1
-        continue_learning = {
-            "path_id": ctx["path_id"],
-            "lesson_id": ctx["lesson_id"],
-            "title": ctx["title"],
-            "path_title": ctx["path_title"],
-            "completed_cards": 0,
-            "total_cards": total_cards,
-            "progress_percentage": 0,
-            "image_url": ctx["image_url"],
-        }
+        for ctx in news_path_contexts:
+            if ctx["lesson_id"] not in completed_lesson_ids:
+                lesson_res = await db.execute(select(Lesson).filter(Lesson.id == ctx["lesson_id"]))
+                lesson = lesson_res.scalars().first()
+                total_cards = len(lesson.cards_data) if (lesson and lesson.cards_data) else 1
+                prog_for_les = next((pr for pr in all_progress if pr.lesson_id == ctx["lesson_id"]), None)
+                cards_done = prog_for_les.cards_completed if prog_for_les else 0
+                pct = int((cards_done / max(1, total_cards)) * 100)
+                continue_learning = {
+                    "path_id": ctx["path_id"],
+                    "lesson_id": ctx["lesson_id"],
+                    "title": ctx["title"],
+                    "path_title": ctx["path_title"],
+                    "completed_cards": cards_done,
+                    "total_cards": total_cards,
+                    "progress_percentage": pct,
+                    "image_url": ctx["image_url"],
+                }
+                break
 
     # Priority 3: First available uncompleted lesson from any existing path
     if not continue_learning:
@@ -483,15 +490,18 @@ async def get_learn_dashboard(
             sorted_les = sorted(p.lessons, key=lambda x: x.sequence_order)
             for les in sorted_les:
                 if les.id not in completed_lesson_ids:
+                    prog_for_les = next((pr for pr in all_progress if pr.lesson_id == les.id), None)
+                    cards_done = prog_for_les.cards_completed if prog_for_les else 0
                     total_cards = len(les.cards_data) if les.cards_data else 1
+                    pct = int((cards_done / max(1, total_cards)) * 100)
                     continue_learning = {
                         "path_id": p.id,
                         "lesson_id": les.id,
                         "title": les.title,
                         "path_title": p.title,
-                        "completed_cards": 0,
+                        "completed_cards": cards_done,
                         "total_cards": total_cards,
-                        "progress_percentage": 0,
+                        "progress_percentage": pct,
                         "image_url": p.image_url,
                     }
                     break
@@ -524,24 +534,47 @@ async def get_learn_dashboard(
             "image_url": p.image_url,
         })
 
-    # ── Recommended Lessons (news-derived, real IDs) ─────────────────────────
-    recommended_lessons = []
+    # ── Recommended Lessons (news + paths, prioritized by uncompleted) ──────
+    candidate_lessons = []
     for ctx in news_path_contexts:
-        # Read actual card count from DB for accurate duration
-        lesson_res = await db.execute(select(Lesson).filter(Lesson.id == ctx["lesson_id"]))
-        lesson = lesson_res.scalars().first()
-        total_cards = len(lesson.cards_data) if (lesson and lesson.cards_data) else 1
-        duration_mins = lesson.estimated_minutes if lesson else max(3, math.ceil(total_cards * 1.2))
-        recommended_lessons.append({
+        candidate_lessons.append({
             "id": ctx["lesson_id"],
             "lesson_id": ctx["lesson_id"],
             "path_id": ctx["path_id"],
             "title": ctx["title"],
             "description": ctx["description"],
             "level": ctx.get("level", "Beginner"),
-            "duration": f"{duration_mins} min",
             "category": ctx["path_title"],
             "image_url": ctx["image_url"],
+        })
+
+    for p in paths:
+        for les in p.lessons:
+            if les.id not in {c["lesson_id"] for c in candidate_lessons}:
+                candidate_lessons.append({
+                    "id": les.id,
+                    "lesson_id": les.id,
+                    "path_id": p.id,
+                    "title": les.title,
+                    "description": les.description or p.description,
+                    "level": p.level or "Beginner",
+                    "category": p.title,
+                    "image_url": p.image_url,
+                })
+
+    uncompleted_candidates = [c for c in candidate_lessons if c["lesson_id"] not in completed_lesson_ids]
+    completed_candidates = [c for c in candidate_lessons if c["lesson_id"] in completed_lesson_ids]
+    ordered_candidates = uncompleted_candidates + completed_candidates
+
+    recommended_lessons = []
+    for cand in ordered_candidates:
+        lesson_res = await db.execute(select(Lesson).filter(Lesson.id == cand["lesson_id"]))
+        lesson = lesson_res.scalars().first()
+        total_cards = len(lesson.cards_data) if (lesson and lesson.cards_data) else 1
+        duration_mins = lesson.estimated_minutes if lesson else max(3, math.ceil(total_cards * 1.2))
+        recommended_lessons.append({
+            **cand,
+            "duration": f"{duration_mins} min",
         })
 
     return {
@@ -643,18 +676,26 @@ async def get_lesson_content(
     )
     progress = prog_res.scalars().first()
     
+    now = datetime.utcnow()
     if not progress:
         progress = UserLessonProgress(
             user_id=current_user.id, 
             lesson_id=lesson.id, 
             path_id=lesson.path_id, 
             cards_completed=0,
-            status="in_progress"
+            status="in_progress",
+            last_accessed=now,
         )
         db.add(progress)
-        await db.commit()
-        await db.refresh(lesson)
-        await db.refresh(progress)
+    else:
+        progress.last_accessed = now
+        if not progress.path_id and lesson.path_id:
+            progress.path_id = lesson.path_id
+        if progress.status != "completed":
+            progress.status = "in_progress"
+
+    await db.commit()
+    await db.refresh(progress)
 
     total_cards = len(lesson.cards_data) if lesson.cards_data else 0
     cards_done = progress.cards_completed if progress and progress.cards_completed is not None else 0
