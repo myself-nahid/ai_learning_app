@@ -667,17 +667,16 @@ async def get_lesson_content(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
     
-    # Ensure progress tracking exists
     prog_res = await db.execute(
         select(UserLessonProgress).filter(
             UserLessonProgress.user_id == current_user.id, 
             UserLessonProgress.lesson_id == lesson_id
         )
     )
-    progress = prog_res.scalars().first()
-    
+    progs = prog_res.scalars().all()
     now = datetime.utcnow()
-    if not progress:
+
+    if not progs:
         progress = UserLessonProgress(
             user_id=current_user.id, 
             lesson_id=lesson.id, 
@@ -688,6 +687,7 @@ async def get_lesson_content(
         )
         db.add(progress)
     else:
+        progress = progs[0]
         progress.last_accessed = now
         if not progress.path_id and lesson.path_id:
             progress.path_id = lesson.path_id
@@ -695,10 +695,9 @@ async def get_lesson_content(
             progress.status = "in_progress"
 
     await db.commit()
-    await db.refresh(progress)
 
     total_cards = len(lesson.cards_data) if lesson.cards_data else 0
-    cards_done = progress.cards_completed if progress and progress.cards_completed is not None else 0
+    cards_done = progress.cards_completed if (progress and progress.cards_completed is not None) else 0
 
     return {
         "lesson_id": lesson.id,
@@ -716,12 +715,31 @@ async def update_lesson_progress(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    prog_res = await db.execute(select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id, UserLessonProgress.lesson_id == lesson_id))
-    progress = prog_res.scalars().first()
-    
-    if progress and progress.cards_completed < card_index:
-        progress.cards_completed = card_index
-        progress.last_accessed = datetime.utcnow()
+    prog_res = await db.execute(
+        select(UserLessonProgress).filter(
+            UserLessonProgress.user_id == current_user.id,
+            UserLessonProgress.lesson_id == lesson_id
+        )
+    )
+    progs = prog_res.scalars().all()
+    if progs:
+        for p in progs:
+            if (p.cards_completed or 0) < card_index:
+                p.cards_completed = card_index
+            p.last_accessed = datetime.utcnow()
+        await db.commit()
+    else:
+        lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+        lesson = lesson_res.scalars().first()
+        p = UserLessonProgress(
+            user_id=current_user.id,
+            lesson_id=lesson_id,
+            path_id=lesson.path_id if lesson else None,
+            cards_completed=card_index,
+            status="in_progress",
+            last_accessed=datetime.utcnow()
+        )
+        db.add(p)
         await db.commit()
     
     return {"status": "saved"}
