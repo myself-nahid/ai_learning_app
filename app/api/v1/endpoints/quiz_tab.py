@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 from sqlalchemy import distinct
 from sqlalchemy.orm import selectinload
 from datetime import datetime
+from typing import Optional
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, QuizSet, QuizQuestion, QuizAttempt, NewsArticle
@@ -16,43 +17,138 @@ from app.schemas.response import MessageResponse
 router = APIRouter(prefix="/quiz-tab", tags=["Dedicated Quiz Section"])
 
 
-def _build_news_quiz_context(news_articles):
-    if not news_articles:
-        return None
 
-    article = news_articles[0]
+async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
+    """
+    Find or create a real QuizSet + QuizQuestions from a NewsArticle.
+    Always returns a real quiz_set_id > 0.
+    """
+    from app.db.models import QuizSet as QS, QuizQuestion as QQ
+
     headline = (article.headline or "").strip() or "this news story"
     topic = (article.tag or article.category or headline or "").strip()
-    return {
-        "title": f"Quick Quiz: {headline}",
-        "description": f"Test your understanding of {headline} and why it matters.",
-        "category": topic or "News",
-        "level": "Beginner",
-        "estimated_minutes": 3,
-        "xp_reward": 10,
-        "questions": [
-            {
-                "question_text": f"What is the main idea behind {headline}?",
-                "options": {
-                    "A": "It introduces a new tool or idea",
-                    "B": "It has no practical impact",
-                    "C": "It only affects a very small group",
-                    "D": "It is unrelated to everyday work"
-                },
-                "correct_option_key": "A"
+    quiz_title = f"Quick Quiz: {headline[:55]}{'...' if len(headline) > 55 else ''}"
+    description = f"Test your understanding of {headline} and why it matters."
+
+    # ── Look up existing quiz set with this title ───────────────────────────
+    existing_res = await db.execute(select(QS).filter(QS.title == quiz_title))
+    existing_qs = existing_res.scalars().first()
+    if existing_qs:
+        q_count_res = await db.execute(select(QQ).filter(QQ.quiz_set_id == existing_qs.id))
+        actual_q_count = len(q_count_res.scalars().all())
+        return {
+            "quiz_set_id": existing_qs.id,
+            "title": existing_qs.title,
+            "description": existing_qs.description or description,
+            "category": existing_qs.category or topic,
+            "level": existing_qs.level or "Beginner",
+            "total_questions": actual_q_count,
+            "estimated_minutes": existing_qs.estimated_minutes or 3,
+            "xp_reward": existing_qs.xp_reward or 10,
+        }
+
+    # ── Build dynamic questions from article content ────────────────────────
+    content_blocks = article.content_blocks or []
+    takeaways: list = []
+    paragraph_text: str = ""
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type", "")
+        bcontent = block.get("content") or block.get("text") or ""
+        if btype == "paragraph" and bcontent and not paragraph_text:
+            paragraph_text = str(bcontent).strip()
+        elif btype == "takeaways" and isinstance(bcontent, list):
+            takeaways.extend([str(i).strip() for i in bcontent if i])
+
+    questions_data = [
+        {
+            "question_text": f"What is the main idea behind: {headline[:60]}?",
+            "options": {
+                "A": f"{topic} introduces a new development or tool",
+                "B": "It has no practical impact on everyday work",
+                "C": "It only affects a very small niche group",
+                "D": "It is purely for entertainment purposes",
             },
-            {
-                "question_text": f"Why should someone care about {headline}?",
-                "options": {
-                    "A": "It may improve efficiency or understanding",
-                    "B": "It likely creates no value",
-                    "C": "It only matters for specialists",
-                    "D": "It is only for entertainment"
-                },
-                "correct_option_key": "A"
-            }
-        ]
+            "correct_option_key": "A",
+        },
+        {
+            "question_text": f"Why should professionals pay attention to {topic}?",
+            "options": {
+                "A": "It may improve efficiency or understanding",
+                "B": "It creates no value for most people",
+                "C": "It is only relevant to scientists",
+                "D": "It is too complex to be useful",
+            },
+            "correct_option_key": "A",
+        },
+    ]
+
+    # Add a takeaway-based question if we have data
+    if takeaways:
+        first_takeaway = takeaways[0][:80]
+        questions_data.append({
+            "question_text": f"Which of the following is a key takeaway from this topic?",
+            "options": {
+                "A": first_takeaway,
+                "B": "This topic has no real-world applications",
+                "C": "Only large corporations benefit from this",
+                "D": "This replaces all human judgment entirely",
+            },
+            "correct_option_key": "A",
+        })
+
+    # Add a paragraph-comprehension question if we have a paragraph
+    if paragraph_text:
+        questions_data.append({
+            "question_text": f"According to the article, what best describes the situation around {topic}?",
+            "options": {
+                "A": paragraph_text[:80] + ("..." if len(paragraph_text) > 80 else ""),
+                "B": f"{topic} is being completely abandoned",
+                "C": "No significant changes are happening",
+                "D": "Only negative effects are being reported",
+            },
+            "correct_option_key": "A",
+        })
+
+    estimated_minutes = max(2, len(questions_data))
+
+    # ── Create QuizSet ──────────────────────────────────────────────────────
+    new_qs = QS(
+        category=topic,
+        title=quiz_title,
+        description=description,
+        level="Beginner",
+        total_questions=len(questions_data),
+        estimated_minutes=estimated_minutes,
+        xp_reward=10,
+    )
+    db.add(new_qs)
+    await db.flush()
+
+    for qd in questions_data:
+        q = QQ(
+            quiz_set_id=new_qs.id,
+            question_text=qd["question_text"],
+            options=qd["options"],
+            correct_option_key=qd["correct_option_key"],
+        )
+        db.add(q)
+
+    await db.commit()
+
+    return {
+        "quiz_set_id": new_qs.id,
+        "title": quiz_title,
+        "description": description,
+        "category": topic,
+        "level": "Beginner",
+        "total_questions": len(questions_data),
+        "estimated_minutes": estimated_minutes,
+        "xp_reward": 10,
     }
+
+
 
 # 1. GET QUIZ DASHBOARD (Screens 1 & 2)
 @router.get("/dashboard", response_model=QuizDashboardResponse)
@@ -101,27 +197,37 @@ async def get_quiz_dashboard(
 
     news_res = await db.execute(select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(3))
     latest_news = news_res.scalars().all()
-    news_quiz_context = _build_news_quiz_context(latest_news)
 
-    # Fetch Quiz Sets and group by Category
+    # ── Ensure every news article has a real QuizSet + Questions ────────────
+    news_quiz_contexts = []
+    for article in latest_news:
+        ctx = await _ensure_news_quiz_set(db, article)
+        if ctx:
+            news_quiz_contexts.append(ctx)
+
+    # Fetch Quiz Sets and group by Category (now includes auto-created sets)
     query = select(QuizSet)
     if category_tab != "For You" and category_tab != "Trending":
         query = query.filter(QuizSet.category == category_tab)
-        
+
     sets_res = await db.execute(query)
     quiz_sets = sets_res.scalars().all()
 
-    # 2. Fetch "Continue Quiz" (3-tier state logic matching mockData & UI design)
+    # ── Continue Quiz: 3-tier priority ───────────────────────────────────────
     completed_set_ids = {a.quiz_set_id for a in all_attempts if a.status == "completed"}
     in_progress = [a for a in all_attempts if a.status == "in_progress" and a.quiz_set_id not in completed_set_ids]
-    
+
     continue_quiz = None
+    # Priority 1: Resume an in_progress attempt
     if in_progress:
         latest = sorted(in_progress, key=lambda x: x.started_at, reverse=True)[0]
         set_res = await db.execute(select(QuizSet).filter(QuizSet.id == latest.quiz_set_id))
         q_set = set_res.scalars().first()
-        
+
         if q_set:
+            # Get actual question count from DB
+            q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
+            actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
             answered_count = len(latest.user_answers or {})
             continue_quiz = ContinueQuizSchema(
                 card_type="continue",
@@ -129,35 +235,40 @@ async def get_quiz_dashboard(
                 quiz_set_id=q_set.id,
                 category=q_set.category,
                 quiz_title=q_set.title,
-                current_question=min(answered_count + 1, q_set.total_questions),
-                total_questions=q_set.total_questions,
-                progress_percentage=int((answered_count / q_set.total_questions) * 100),
-                estimated_minutes=q_set.estimated_minutes
+                current_question=min(answered_count + 1, actual_total),
+                total_questions=actual_total,
+                progress_percentage=int((answered_count / max(1, actual_total)) * 100),
+                estimated_minutes=q_set.estimated_minutes,
             )
 
-    if not continue_quiz and news_quiz_context:
+    # Priority 2: Use first news-derived quiz set (real ID from DB)
+    if not continue_quiz and news_quiz_contexts:
+        ctx = news_quiz_contexts[0]
         continue_quiz = ContinueQuizSchema(
             card_type="recommended",
-            quiz_set_id=0,
-            category=news_quiz_context["category"],
-            quiz_title=news_quiz_context["title"],
-            total_questions=len(news_quiz_context["questions"]),
+            quiz_set_id=ctx["quiz_set_id"],
+            category=ctx["category"],
+            quiz_title=ctx["title"],
+            total_questions=ctx["total_questions"],
             progress_percentage=0,
-            estimated_minutes=news_quiz_context["estimated_minutes"]
+            estimated_minutes=ctx["estimated_minutes"],
         )
 
-    if not continue_quiz and len(quiz_sets) > 0:
+    # Priority 3: First uncompleted set from DB
+    if not continue_quiz and quiz_sets:
         uncompleted_sets = [qs for qs in quiz_sets if qs.id not in completed_set_ids]
         if uncompleted_sets:
             rec_set = uncompleted_sets[0]
+            q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == rec_set.id))
+            actual_total = len(q_count_res.scalars().all()) or rec_set.total_questions
             continue_quiz = ContinueQuizSchema(
                 card_type="recommended",
                 quiz_set_id=rec_set.id,
                 category=rec_set.category,
                 quiz_title=rec_set.title,
-                total_questions=rec_set.total_questions,
+                total_questions=actual_total,
                 progress_percentage=0,
-                estimated_minutes=rec_set.estimated_minutes
+                estimated_minutes=rec_set.estimated_minutes,
             )
         else:
             feat_set = quiz_sets[0]
@@ -167,28 +278,48 @@ async def get_quiz_dashboard(
                 category=feat_set.category,
                 quiz_title=feat_set.title,
                 total_completed_sets=len(completed_set_ids),
-                progress_percentage=100
+                progress_percentage=100,
             )
 
-    categories_dict = {}
-    if news_quiz_context:
-        categories_dict["For You"] = [
-            QuizSetCardSchema(
-                quiz_set_id=0,
-                title=news_quiz_context["title"],
-                description=news_quiz_context["description"],
-                level=news_quiz_context["level"],
-                total_questions=len(news_quiz_context["questions"]),
-                estimated_minutes=news_quiz_context["estimated_minutes"],
-                xp_reward=news_quiz_context["xp_reward"],
-                status="not_started",
-                score=None,
-                last_attempt_id=None
-            )
-        ]
+    # ── Build categories dict ─────────────────────────────────────────────────
+    categories_dict: dict = {}
 
+    # "For You" tab: show all news-derived quiz sets with real IDs
+    if news_quiz_contexts:
+        for_you_cards = []
+        for ctx in news_quiz_contexts:
+            attempt_for_ctx = next(
+                (a for a in all_attempts if a.quiz_set_id == ctx["quiz_set_id"]), None
+            )
+            if attempt_for_ctx and attempt_for_ctx.status == "completed":
+                status = "completed"
+                score = attempt_for_ctx.score
+                last_attempt_id = attempt_for_ctx.id
+            elif attempt_for_ctx:
+                status = attempt_for_ctx.status
+                score = attempt_for_ctx.score
+                last_attempt_id = attempt_for_ctx.id
+            else:
+                status = "not_started"
+                score = None
+                last_attempt_id = None
+
+            for_you_cards.append(QuizSetCardSchema(
+                quiz_set_id=ctx["quiz_set_id"],
+                title=ctx["title"],
+                description=ctx["description"],
+                level=ctx["level"],
+                total_questions=ctx["total_questions"],
+                estimated_minutes=ctx["estimated_minutes"],
+                xp_reward=ctx["xp_reward"],
+                status=status,
+                score=score,
+                last_attempt_id=last_attempt_id,
+            ))
+        categories_dict["For You"] = for_you_cards
+
+    # All other sets grouped by their category
     for q_set in quiz_sets:
-        # Find all attempts for this set
         attempts_for_set = [a for a in all_attempts if a.quiz_set_id == q_set.id]
         completed_att = next((a for a in attempts_for_set if a.status == "completed"), None)
         latest_att = sorted(attempts_for_set, key=lambda x: x.started_at, reverse=True)[0] if attempts_for_set else None
@@ -206,21 +337,31 @@ async def get_quiz_dashboard(
             score = None
             last_attempt_id = None
 
+        # Get actual question count
+        q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
+        actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
+
         card = QuizSetCardSchema(
-            quiz_set_id=q_set.id, title=q_set.title, description=q_set.description,
-            level=q_set.level, total_questions=q_set.total_questions,
-            estimated_minutes=q_set.estimated_minutes, xp_reward=q_set.xp_reward,
-            status=status, score=score, last_attempt_id=last_attempt_id
+            quiz_set_id=q_set.id,
+            title=q_set.title,
+            description=q_set.description,
+            level=q_set.level,
+            total_questions=actual_total,
+            estimated_minutes=q_set.estimated_minutes,
+            xp_reward=q_set.xp_reward,
+            status=status,
+            score=score,
+            last_attempt_id=last_attempt_id,
         )
-        
+
         if q_set.category not in categories_dict:
             categories_dict[q_set.category] = []
         categories_dict[q_set.category].append(card)
 
-    # Fetch distinct categories across the database to maintain full tab bar options
+    # Build full category list for tab bar
     distinct_cat_res = await db.execute(select(distinct(QuizSet.category)))
     db_categories = [c for c in distinct_cat_res.scalars().all() if c]
-    
+
     default_tabs = ["For You", "Trending", "Robotics", "Generative AI", "Tools", "Research", "Sports", "Politics"]
     all_categories_list = ["For You"]
     for category in default_tabs:
@@ -234,7 +375,7 @@ async def get_quiz_dashboard(
         stats=stats,
         continue_quiz=continue_quiz,
         categories=categories_dict,
-        all_categories=all_categories_list
+        all_categories=all_categories_list,
     )
 
 # 2. START OR RETAKE A QUIZ (Screen 3)
@@ -244,23 +385,7 @@ async def start_quiz(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if quiz_set_id == 0:
-        news_res = await db.execute(select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(1))
-        latest_news = news_res.scalars().first()
-        news_quiz_context = _build_news_quiz_context([latest_news] if latest_news else [])
-        if not news_quiz_context:
-            raise HTTPException(status_code=404, detail="Quiz Set not found")
-
-        formatted_questions = [
-            {"id": idx + 1, "question_text": q["question_text"], "options": q["options"]}
-            for idx, q in enumerate(news_quiz_context["questions"])
-        ]
-        return QuizStartResponse(
-            attempt_id=0,
-            quiz_title=news_quiz_context["title"],
-            total_questions=len(formatted_questions),
-            questions=formatted_questions
-        )
+    # All quiz_set_ids are now real DB IDs — no need for the quiz_set_id=0 special case
 
     # 1. Fetch Quiz Set with questions
     qset_res = await db.execute(
