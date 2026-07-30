@@ -132,6 +132,23 @@ from datetime import datetime
 import pytz # Need 'pytz' in requirements.txt for timezone math
 from app.services.notification_service import send_push_notification
 
+
+async def _send_user_daily_reminder(user):
+    if not user.fcm_token:
+        return None
+
+    await send_push_notification(
+        token=user.fcm_token,
+        title="Your Daily Pulse is Ready! ⚡",
+        body="Tap to complete today's 5-minute AI briefing and keep your streak alive.",
+        data_payload={
+            "screen": "daily_briefing_sequence",
+            "action": "start",
+        },
+    )
+    return None
+
+
 @celery_app.task(name="process_daily_reminders")
 def process_daily_reminders():
     return run_async(send_reminders_async())
@@ -163,14 +180,4 @@ async def send_reminders_async():
                 current_time_in_user_tz.minute == user_reminder_time.minute):
                 
                 # 4. SEND THE NOTIFICATION!
-                await send_push_notification(
-                    fcm_token=user.fcm_token,
-                    title="Your Daily Pulse is Ready! ⚡",
-                    body="Tap to complete today's 5-minute AI briefing and keep your streak alive.",
-                    data_payload={
-                        # The mobile app intercepts this 'screen' variable 
-                        # and opens the Daily Briefing Sequence instantly.
-                        "screen": "daily_briefing_sequence", 
-                        "action": "start"
-                    }
-                )
+                await _send_user_daily_reminder(user)
