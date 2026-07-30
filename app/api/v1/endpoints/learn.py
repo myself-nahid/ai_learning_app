@@ -502,9 +502,11 @@ async def get_learn_dashboard(
     learning_paths = []
     for p in paths:
         actual_total_lessons = len(p.lessons) if p.lessons else (p.total_lessons or 1)
+        path_lesson_ids = {les.id for les in p.lessons} if p.lessons else set()
         path_completed = sum(
             1 for prog in all_progress
-            if prog.path_id == p.id and prog.status == "completed"
+            if prog.status == "completed"
+            and (prog.path_id == p.id or prog.lesson_id in path_lesson_ids)
         )
         progress_pct = int((path_completed / max(1, actual_total_lessons)) * 100)
         total_mins = (
@@ -561,8 +563,14 @@ async def get_path_details(
     path = path_res.scalars().first()
     if not path: raise HTTPException(status_code=404)
 
-    # Get user progress for all lessons in this path
-    prog_res = await db.execute(select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id, UserLessonProgress.path_id == path_id))
+    # Get user progress — query by lesson IDs (handles progress rows where path_id was None)
+    path_lesson_ids = [les.id for les in path.lessons] if path.lessons else []
+    prog_res = await db.execute(
+        select(UserLessonProgress).filter(
+            UserLessonProgress.user_id == current_user.id,
+            UserLessonProgress.lesson_id.in_(path_lesson_ids),
+        )
+    )
     progress_map = {p.lesson_id: p for p in prog_res.scalars().all()}
 
     sorted_lessons = sorted(path.lessons, key=lambda x: x.sequence_order)
@@ -572,17 +580,19 @@ async def get_path_details(
 
     for idx, lesson in enumerate(sorted_lessons):
         prog = progress_map.get(lesson.id)
+        total_c = len(lesson.cards_data) if lesson.cards_data else 1
         cards_done = 0
 
         if prog and prog.status == "completed":
             status = "completed"
-            cards_done = len(lesson.cards_data) if lesson.cards_data else 5
+            # Use stored cards_completed if available, otherwise use total_c
+            cards_done = prog.cards_completed if prog.cards_completed else total_c
             completed_count += 1
         elif prog and prog.status == "in_progress":
             status = "in_progress"
             cards_done = prog.cards_completed or 0
         else:
-            # Sequential unlock: Lesson 1 or if previous lesson is completed
+            # Sequential unlock: Lesson 1 always available; subsequent lessons unlock when previous is completed
             prev_lesson = sorted_lessons[idx - 1] if idx > 0 else None
             prev_prog = progress_map.get(prev_lesson.id) if prev_lesson else None
             if idx == 0 or (prev_prog and prev_prog.status == "completed"):
@@ -590,7 +600,6 @@ async def get_path_details(
             else:
                 status = "locked"
 
-        total_c = len(lesson.cards_data) if lesson.cards_data else 5
         formatted_lessons.append({
             "lesson_id": lesson.id,
             "sequence_order": lesson.sequence_order,
@@ -599,7 +608,7 @@ async def get_path_details(
             "total_cards": total_c,
             "cards_completed": cards_done,
             "estimated_minutes": lesson.estimated_minutes,
-            "status": status
+            "status": status,
         })
 
     total_lessons = len(sorted_lessons) or 1
@@ -608,7 +617,7 @@ async def get_path_details(
     return {
         "path_id": path.id, "title": path.title, "description": path.description,
         "level": path.level, "progress_percentage": progress_pct,
-        "lessons": formatted_lessons
+        "lessons": formatted_lessons,
     }
 
 # 3. START/RESUME LESSON (Screens 3-8)
@@ -699,12 +708,18 @@ async def complete_lesson(
     if progs:
         for p in progs:
             p.status = "completed"
+            p.cards_completed = payload.completed_cards
             p.last_accessed = datetime.utcnow()
     else:
+        # Create a completed progress record with full card count and path_id
+        lesson_for_path_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+        lesson_for_path = lesson_for_path_res.scalars().first()
         p = UserLessonProgress(
             user_id=current_user.id,
             lesson_id=lesson_id,
-            status="completed"
+            path_id=lesson_for_path.path_id if lesson_for_path else None,
+            cards_completed=payload.completed_cards,
+            status="completed",
         )
         db.add(p)
         progs = [p]
