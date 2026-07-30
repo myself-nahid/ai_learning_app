@@ -704,6 +704,8 @@ async def get_lesson_content(
         "path_id": lesson.path_id,
         "title": lesson.title,
         "estimated_minutes": lesson.estimated_minutes or 5,
+        "total_cards": total_cards,
+        "cards_completed": cards_done,
         "cards": _normalize_lesson_cards(lesson.cards_data)
     }
 

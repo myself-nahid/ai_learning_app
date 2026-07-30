@@ -73,4 +73,6 @@ class LessonContentResponse(BaseModel):
     path_id: Optional[int] = None
     title: str
     estimated_minutes: int
+    total_cards: Optional[int] = None
+    cards_completed: Optional[int] = None
     cards: List[Any]
