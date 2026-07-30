@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import time, datetime
 
 class UserProfileCreate(BaseModel):
@@ -35,6 +35,7 @@ class UserOnboarding(BaseModel):
 #     primary_goal: Optional[str] = "Stay informed about AI"
 
 class UserProfileResponse(BaseModel):
+    id: int
     full_name: str
     email: EmailStr
     profile_image: Optional[str]
@@ -50,7 +51,11 @@ class UpdateNameRequest(BaseModel):
 
 class UpdateSettingsRequest(BaseModel):
     push_notifications: Optional[bool] = None
-    daily_reminder_time: Optional[time] = None
+    daily_reminder_time: Optional[Union[time, str]] = None
+    fcm_token: Optional[str] = None
+
+class RegisterPushTokenRequest(BaseModel):
+    fcm_token: str
 
 class ChangePasswordRequest(BaseModel):
     current_password: str

@@ -1,9 +1,53 @@
+import asyncio
+import json
+import logging
+
 from openai import AsyncOpenAI
 from app.core.config import settings
-from app.schemas.home import NewsDetailResponse 
-import json
+
+logger = logging.getLogger(__name__)
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 2  # Initial delay, will be multiplied by retry count
 
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+async def _call_openai_with_retry(prompt: str, max_retries: int = MAX_RETRIES):
+    """Call OpenAI API with exponential backoff retry logic."""
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You output strict JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            last_exception = e
+            logger.warning(
+                "OpenAI API call failed (attempt %d/%d): %s",
+                attempt + 1,
+                max_retries,
+                str(e),
+            )
+            if attempt < max_retries - 1:
+                wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
+                logger.info("Retrying in %d seconds...", wait_time)
+                await asyncio.sleep(wait_time)
+
+    logger.error(
+        "OpenAI API call failed after %d attempts: %s",
+        max_retries,
+        str(last_exception),
+    )
+    raise last_exception
+
 
 async def transform_news_to_todai_format(raw_article: dict, category: str):
     """
@@ -26,15 +70,7 @@ async def transform_news_to_todai_format(raw_article: dict, category: str):
        - 'quote' type (if relevant)
     """
 
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You output strict JSON."},
-                  {"role": "user", "content": prompt}],
-        response_format={ "type": "json_object" }
-    )
-    
-    ai_data = json.loads(response.choices[0].message.content)
-    return ai_data
+    return await _call_openai_with_retry(prompt)
 
 async def generate_lesson_and_quiz(news_headline: str, interest: str, level: str):
     """
@@ -56,10 +92,4 @@ async def generate_lesson_and_quiz(news_headline: str, interest: str, level: str
        - 'explanation' (why it's correct)
     """
 
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You output strict JSON."},
-                  {"role": "user", "content": prompt}],
-        response_format={ "type": "json_object" }
-    )
-    return json.loads(response.choices[0].message.content)
+    return await _call_openai_with_retry(prompt)

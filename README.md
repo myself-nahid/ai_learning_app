@@ -81,7 +81,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 Start the full stack with:
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 This will launch:
@@ -142,3 +142,64 @@ This will launch:
 - The app currently auto-creates database tables on startup for dev/testing convenience.
 - OpenAI generation uses `gpt-4o-mini` via the async `openai` client.
 - Celery beat is configured to run a daily task and generate feeds for verified users.
+
+## Developer Docker Compose Commands (recommended)
+
+Use these commands when developing locally with Docker Compose (the project uses `docker compose`):
+
+- Start the full stack (build images if needed):
+
+```powershell
+docker compose up -d --build
+```
+
+- Start only Redis + Postgres (fast start when you only need DB services):
+
+```powershell
+docker compose up -d db redis
+```
+
+- Recreate worker and beat after config changes (ensures env updates like `POSTGRES_PORT` are applied):
+
+```powershell
+docker compose up -d --force-recreate --no-deps worker beat
+```
+
+- Check worker environment inside the container (verify `REDIS_URL`, `POSTGRES_PORT`):
+
+```powershell
+docker compose exec worker env | findstr REDIS_URL
+docker compose exec worker env | findstr POSTGRES_PORT
+```
+
+- Trigger the daily generation manually (requires authenticated API call). If you can't authenticate, run the task inside the worker container for testing:
+
+```powershell
+# (preferred) authenticated request from your frontend or curl
+curl -X POST http://localhost:8000/api/v1/home/trigger-daily-pulse \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+
+# (testing) invoke task synchronously inside the worker container
+docker compose exec worker python -c "from app.worker.tasks import generate_real_daily_content; generate_real_daily_content()"
+```
+
+- Follow logs to watch task processing:
+
+```powershell
+docker compose logs -f worker
+docker compose logs -f beat
+```
+
+- Connect to Postgres on the host (the Compose file maps container port 5432 to host 5434):
+
+```powershell
+# psql example (Windows with psql in PATH)
+psql -h localhost -p 5434 -U postgres -d aishowcase
+```
+
+Notes:
+
+- When running services in Docker, use the container hostnames defined in Compose (e.g., `db`, `redis`). Do not rely on `localhost` inside containers.
+- If you change `docker-compose.yml`, recreate the affected containers so they pick up new environment variables.
+- The `version` key in `docker-compose.yml` is obsolete for newer Docker Compose versions; you can safely remove it to avoid warnings.
+

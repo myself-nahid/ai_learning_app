@@ -24,11 +24,11 @@ celery_app.conf.update(
 
 celery_app.conf.beat_schedule = {
     "daily-ai-content-generation": {
-        "task": "generate_all_users_feed",
+        "task": "generate_real_daily_content",
         "schedule": crontab(hour=2, minute=0), # Runs every day at 2:00 AM
     },
     "check-daily-reminders": {
         "task": "process_daily_reminders",
-        "schedule": crontab(minute="*"), # Runs every minute of every day
+        "schedule": crontab(minute="*/5"), # Runs every 5 minutes to reduce database pressure
     },
 }

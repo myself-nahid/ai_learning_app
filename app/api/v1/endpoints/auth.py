@@ -14,7 +14,7 @@ from app.core.security import (
 )
 from app.db.models import ActivityLog, User, OTP, UserProfile 
 from app.schemas.auth import UserCreate, Token, OTPVerify, ForgotPassword, ResetPassword, UserLogin
-from app.schemas.response import StandardResponse
+from app.schemas.response import MessageResponse, StandardResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -290,6 +290,6 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
         message="Password successfully reset. You can now login."
     )
 
-@router.post("/logout")
+@router.post("/logout", response_model=MessageResponse)
 async def logout(current_user: User = Depends(get_current_user)):
     return {"message": "Successfully logged out"}

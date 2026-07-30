@@ -1,9 +1,14 @@
-from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
-from app.core.config import settings
-from app.db.models import OTP
+import logging
 from datetime import datetime, timedelta
 import random
+
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.db.models import OTP
+
+logger = logging.getLogger(__name__)
 
 # 1. Configuration for FastAPI-Mail
 conf = ConnectionConfig(
@@ -60,5 +65,4 @@ async def send_otp_email(email: str, otp_code: str, purpose: str):
     try:
         await fm.send_message(message)
     except Exception as e:
-        # In production, log this error to Sentry or a log file
-        print(f"FAILED TO SEND EMAIL: {e}")
+        logger.error("Failed to send email to %s: %s", email, str(e), exc_info=True)

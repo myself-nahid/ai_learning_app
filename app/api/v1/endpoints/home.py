@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 from datetime import date, datetime
 import math
 from typing import List, Optional
@@ -9,8 +9,16 @@ from typing import List, Optional
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession
-from app.schemas.home import HomeDashboardResponse, NewsCardResponse, NewsCardSchema, NewsDetailResponse
+from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession, Notification
+from app.schemas.home import HomeDashboardResponse, NewsCardResponse, NewsDetailResponse
+from app.schemas.response import (
+    BookmarkToggleResponse,
+    DailyLessonResponse,
+    MessageResponse,
+    ReadStatusResponse,
+    TriggerPulseResponse,
+)
+from app.services.session_service import get_or_create_daily_session
 
 router = APIRouter(prefix="/home", tags=["Home & News"])
 
@@ -39,36 +47,20 @@ async def get_home_dashboard(
     full_greeting = f"{greeting}, {current_user.full_name.split()[0]}"
 
     # 2. FETCH DAILY PULSE PROGRESS
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-     # 1. FETCH DAILY PULSE (FIXED DATE FILTER)
-    pulse_res = await db.execute(
-        select(DailySession).filter(
-            DailySession.user_id == current_user.id, 
-            func.date(DailySession.date) == date.today()
-        )
-    )
-    session = pulse_res.scalars().first()
+    session = await get_or_create_daily_session(db, current_user.id)
 
-    # 2. Calculate Progress
-    if not session:
-        pulse_data = {
-            "activities_completed": 0, "total_activities": 5, "progress_percentage": 0,
-            "estimated_time_left": "8.0 min left", "check_news": False, 
-            "check_lesson": False, "check_quiz": False
-        }
-    else:
-        # news_completed tracks up to 3. Lesson and Quiz are 1 each. Total = 5.
-        completed = session.news_completed + (1 if session.lesson_completed else 0) + (1 if session.quiz_completed else 0)
-        
-        pulse_data = {
-            "activities_completed": completed,
-            "total_activities": 5,
-            "progress_percentage": int((completed / 5) * 100),
-            "estimated_time_left": f"{max(0, 8.0 - (completed * 1.6))} min left",
-            "check_news": session.news_completed >= 3,
-            "check_lesson": session.lesson_completed,
-            "check_quiz": session.quiz_completed
-        }
+    # news_completed tracks up to 3. Lesson and Quiz are 1 each. Total = 5.
+    completed = session.news_completed + (1 if session.lesson_completed else 0) + (1 if session.quiz_completed else 0)
+
+    pulse_data = {
+        "activities_completed": completed,
+        "total_activities": 5,
+        "progress_percentage": int((completed / 5) * 100),
+        "estimated_time_left": f"{max(0, math.ceil(8.0 - (completed * 1.6))):.1f} min left",
+        "check_news": session.news_completed >= 3,
+        "check_lesson": session.lesson_completed,
+        "check_quiz": session.quiz_completed
+    }
 
     # 3. FETCH NEWS FEED (Based on Tabs)
     # Get user profile to know their interests for the 'For You' tab
@@ -76,24 +68,40 @@ async def get_home_dashboard(
         select(User).options(selectinload(User.profile)).filter(User.id == current_user.id)
     )
     user_with_profile = user_res.scalars().first()
-    
+
     query = select(NewsArticle).order_by(desc(NewsArticle.published_at))
 
     # Apply Filtering Logic per Tab
     if category_tab == "For You":
-        query = query.filter(NewsArticle.category.in_(user_with_profile.profile.interests))
+        interests = user_with_profile.profile.interests if (user_with_profile and user_with_profile.profile and user_with_profile.profile.interests) else []
+        if interests:
+            query = query.filter(
+                or_(
+                    NewsArticle.category.in_(interests),
+                    NewsArticle.tag.in_(interests)
+                )
+            )
     elif category_tab == "Trending":
-        # In a real app, you'd filter by 'is_trending' flag or high view count
-        query = query.limit(10) 
+        query = query.limit(10)
     else:
-        # Filter by specific category (Tools, Research, Science, etc.)
-        query = query.filter(NewsArticle.category == category_tab)
+        query = query.filter(
+            or_(
+                NewsArticle.category == category_tab,
+                NewsArticle.tag == category_tab,
+                NewsArticle.category.contains(category_tab),
+                NewsArticle.tag.contains(category_tab)
+            )
+        )
 
-    news_result = await db.execute(query.limit(15))
+    news_result = await db.execute(query)
     articles = news_result.scalars().all()
 
-    # 4. CHECK BOOKMARKS
-    # Get list of article IDs that this user has bookmarked
+    # Fallback: If tab filter yields 0 articles, return latest articles so feed is never empty
+    if not articles:
+        fallback_res = await db.execute(select(NewsArticle).order_by(desc(NewsArticle.published_at)))
+        articles = fallback_res.scalars().all()
+
+    # 4. CHECK BOOKMARKS (Optimized: single query for bookmark IDs)
     bookmark_res = await db.execute(
         select(UserNewsInteraction.news_id).filter(
             UserNewsInteraction.user_id == current_user.id,
@@ -102,24 +110,43 @@ async def get_home_dashboard(
     )
     bookmarked_ids = set(bookmark_res.scalars().all())
 
-    # 5. FORMAT FINAL NEWS LIST
+    # 5. FORMAT FINAL NEWS LIST (map to frontend DTO shape)
     formatted_news = []
+    seen_headlines = set()
     for art in articles:
+        if art.headline and art.headline in seen_headlines:
+            continue
+        seen_headlines.add(art.headline)
+        published_time = get_time_ago_string(art.published_at) if art.published_at else "Just now"
+        date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
         formatted_news.append({
-            "id": art.id,
-            "image_url": art.image_url or "",
-            "tag": art.tag,
-            "headline": art.headline,
-            "summary": art.summary,
-            "read_time_minutes": art.read_time_minutes,
-            "time_ago": get_time_ago_string(art.published_at),
-            "is_bookmarked": art.id in bookmarked_ids
+            "id": str(art.id),
+            "title": art.headline or "",
+            "summary": art.summary or "",
+            "category": art.tag or "Generative AI",
+            "readTime": f"{art.read_time_minutes or 3} min read",
+            "publishedTime": published_time,
+            "date": date_str,
+            "publisher": art.publisher or "TechCrunch",
+            "publishedDate": date_str,
+            "originalUrl": art.original_url or None,
+            "imageUrl": art.image_url or None,
+            "isBookmarked": art.id in bookmarked_ids
         })
+
+    # 5.5 Count unread notifications dynamically
+    unread_count_res = await db.execute(
+        select(func.count(Notification.id)).filter(
+            Notification.user_id == current_user.id,
+            Notification.is_read == False
+        )
+    )
+    unread_notifications = unread_count_res.scalar() or 0
 
     # 6. RETURN COMPLETE DASHBOARD
     return {
         "greeting": full_greeting,
-        "unread_notifications": 2, # Hardcoded for now, could be dynamic
+        "unread_notifications": unread_notifications,
         "profile_image": current_user.profile_image,
         "daily_pulse": pulse_data,
         "todays_news": formatted_news
@@ -137,7 +164,7 @@ async def get_all_news(
     query = select(NewsArticle).order_by(NewsArticle.published_at.desc())
     if category:
         query = query.filter(NewsArticle.category == category)
-    
+
     result = await db.execute(query.offset(skip).limit(limit))
     articles = result.scalars().all()
 
@@ -150,20 +177,27 @@ async def get_all_news(
     )
     bookmarked_ids = set(bookmark_res.scalars().all())
 
-    # 3. MANUALLY CONSTRUCT THE RESPONSE
-    # This fills in the missing 'time_ago' and 'is_bookmarked' fields
+    # 3. MANUALLY CONSTRUCT THE RESPONSE (map to frontend DTO)
     response_data = []
+    seen_headlines = set()
     for art in articles:
+        if art.headline and art.headline in seen_headlines:
+            continue
+        seen_headlines.add(art.headline)
+        date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
         response_data.append({
-            "id": art.id,
-            "image_url": art.image_url or "",
-            "tag": art.tag,
-            "headline": art.headline,
-            "summary": art.summary,
-            "read_time_minutes": art.read_time_minutes,
-            # Use the helper function we created earlier
-            "time_ago": get_time_ago_string(art.published_at), 
-            "is_bookmarked": art.id in bookmarked_ids
+            "id": str(art.id),
+            "title": art.headline or "",
+            "summary": art.summary or "",
+            "category": art.tag or "Generative AI",
+            "readTime": f"{art.read_time_minutes or 3} min read",
+            "publishedTime": get_time_ago_string(art.published_at),
+            "date": date_str,
+            "publisher": art.publisher or "TechCrunch",
+            "publishedDate": date_str,
+            "originalUrl": art.original_url or None,
+            "imageUrl": art.image_url or None,
+            "isBookmarked": art.id in bookmarked_ids
         })
 
     return response_data
@@ -191,42 +225,87 @@ async def get_news_detail(
     interaction = int_res.scalars().first()
     is_bookmarked = interaction.is_bookmarked if interaction else False
 
-    # 3. Fetch 2 related articles
+    # 3. Fetch related articles & check user bookmark status for them
     related_res = await db.execute(
         select(NewsArticle)
         .filter(NewsArticle.category == article.category, NewsArticle.id != news_id)
         .limit(2)
     )
-    
+    related_articles = related_res.scalars().all()
+
+    # Get all bookmarked IDs for current user to ensure user-scoped bookmark flags
+    rel_bookmark_res = await db.execute(
+        select(UserNewsInteraction.news_id).filter(
+            UserNewsInteraction.user_id == current_user.id,
+            UserNewsInteraction.is_bookmarked == True
+        )
+    )
+    user_bookmarked_ids = set(rel_bookmark_res.scalars().all())
+
     related_cards = []
-    for rel in related_res.scalars().all():
+    seen_related = set()
+    for rel in related_articles:
+        if rel.headline and rel.headline in seen_related:
+            continue
+        seen_related.add(rel.headline)
+        rel_date = rel.published_at.strftime("%d %b %Y") if rel.published_at else datetime.utcnow().strftime("%d %b %Y")
         related_cards.append({
-            "id": rel.id,
-            "image_url": rel.image_url or "",
-            "tag": rel.tag,
-            "headline": rel.headline,
-            "summary": None, # This is now safe because we updated the schema
-            "read_time_minutes": rel.read_time_minutes,
-            "time_ago": get_time_ago_string(rel.published_at),
-            "is_bookmarked": False
+            "id": str(rel.id),
+            "title": rel.headline or "",
+            "summary": rel.summary or "",
+            "category": rel.tag or "Generative AI",
+            "readTime": f"{rel.read_time_minutes or 3} min read",
+            "publishedTime": get_time_ago_string(rel.published_at),
+            "date": rel_date,
+            "publisher": rel.publisher or "TechCrunch",
+            "publishedDate": rel_date,
+            "originalUrl": rel.original_url or None,
+            "imageUrl": rel.image_url or None,
+            "isBookmarked": rel.id in user_bookmarked_ids
         })
 
-    # 4. Return Final Data
-    return {
-        "id": article.id,
-        "image_url": article.image_url or "",
-        "tag": article.tag,
-        "headline": article.headline,
-        "published_date": article.published_at.strftime("%d %b %Y"), 
-        "read_time_minutes": article.read_time_minutes,
-        "time_ago": get_time_ago_string(article.published_at),
-        "content_blocks": article.content_blocks,
-        "is_bookmarked": is_bookmarked,
-        "related_news": related_cards
+    # 4. Return Final Data (map to frontend article shape)
+    date_str = article.published_at.strftime("%d %b %Y") if article.published_at else datetime.utcnow().strftime("%d %b %Y")
+    content = article.content_blocks if article.content_blocks else None
+    key_takeaways = None
+    sections = None
+    quote = None
+    if isinstance(article.content_blocks, list):
+        key_takeaways = []
+        sections = []
+        for b in article.content_blocks:
+            if isinstance(b, dict) and b.get('type') in ('takeaway','takeaways','key_takeaways'):
+                items = b.get('items') or b.get('takeaways') or []
+                key_takeaways.extend(items if isinstance(items, list) else [items])
+            elif isinstance(b, dict) and b.get('type') in ('section','sections'):
+                sections.append(b)
+            elif isinstance(b, dict) and b.get('type') == 'quote':
+                quote = b.get('text')
+
+    article_obj = {
+        "id": str(article.id),
+        "title": article.headline or "",
+        "summary": article.summary or (content[0].get('text') if content and isinstance(content, list) and isinstance(content[0], dict) and content[0].get('text') else ""),
+        "category": article.tag or "Generative AI",
+        "readTime": f"{article.read_time_minutes or 3} min read",
+        "publishedTime": get_time_ago_string(article.published_at),
+        "date": date_str,
+        "publisher": getattr(article, 'publisher', 'TechCrunch'),
+        "publishedDate": date_str,
+        "originalUrl": getattr(article, 'original_url', None),
+        "imageUrl": article.image_url or None,
+        "isBookmarked": is_bookmarked,
+        "content": content,
+        "keyTakeaways": key_takeaways if key_takeaways else None,
+        "quote": quote,
+        "sections": sections if sections else None,
+        "relatedNews": related_cards
     }
 
+    return article_obj
+
 # 3. MARK NEWS AS READ (Updates the Daily Pulse Progress!)
-@router.post("/news/{news_id}/read")
+@router.post("/news/{news_id}/read", response_model=ReadStatusResponse)
 async def mark_news_read(
     news_id: int,
     db: AsyncSession = Depends(get_db),
@@ -240,35 +319,39 @@ async def mark_news_read(
     interaction = int_res.scalars().first()
 
     if not interaction:
-        interaction = UserNewsInteraction(user_id=current_user.id, news_id=news_id, is_read=True, read_at=datetime.utcnow())
+        interaction = UserNewsInteraction(
+            user_id=current_user.id, 
+            news_id=news_id, 
+            is_read=True, 
+            read_at=datetime.utcnow()
+        )
         db.add(interaction)
-    elif not interaction.is_read:
-        interaction.is_read = True
-        interaction.read_at = datetime.utcnow()
     else:
-        return {"message": "Already read", "pulse_updated": False}
+        interaction.is_read = True
+        if not interaction.read_at:
+            interaction.read_at = datetime.utcnow()
 
-    # 2. Update Daily Pulse Progress (CRITICAL FIX)
-    # Use func.date to match only the Day, regardless of the Time
-    pulse_query = await db.execute(select(DailySession).filter(
-        DailySession.user_id == current_user.id,
-        func.date(DailySession.date) == date.today() # Strictly match today's date
-    ))
-    session = pulse_query.scalars().first()
-    
-    pulse_updated = False
-    if session:
-        # Check A: If it's a specific assigned news
-        # Check B: OR just allow any news read to count towards the 3 daily news activities
-        if session.news_completed < 3:
-            session.news_completed += 1
-            pulse_updated = True
-        
+    await db.flush()
+
+    # 2. Get/Create today's DailySession and sync news_completed
+    session = await get_or_create_daily_session(db, current_user.id)
+
+    # 3. Explicitly count read articles and sync news_completed
+    read_res = await db.execute(
+        select(func.count(UserNewsInteraction.id)).filter(
+            UserNewsInteraction.user_id == current_user.id,
+            UserNewsInteraction.is_read == True
+        )
+    )
+    total_read = read_res.scalar() or 0
+    session.news_completed = min(3, max(session.news_completed, total_read))
+
     await db.commit()
-    return {"message": "Article marked as read", "pulse_updated": pulse_updated}
+
+    return {"message": "Article marked as read", "pulse_updated": True}
 
 # 4. TOGGLE BOOKMARK
-@router.post("/news/{news_id}/bookmark")
+@router.post("/news/{news_id}/bookmark", response_model=BookmarkToggleResponse)
 async def toggle_bookmark(
     news_id: int,
     db: AsyncSession = Depends(get_db),
@@ -302,47 +385,7 @@ async def toggle_bookmark(
     # 3. Return the saved variable
     return {"is_bookmarked": final_state}
 
-from app.worker.tasks import generate_real_daily_content
-@router.get("/daily-lesson")
-async def get_daily_lesson(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    res = await db.execute(select(DailySession).filter(
-        DailySession.user_id == current_user.id,
-        DailySession.date >= datetime.utcnow().replace(hour=0, minute=0, second=0)
-    ))
-    session = res.scalars().first()
-    if not session or not session.lesson_data:
-        raise HTTPException(status_code=404, detail="Lesson not ready yet.")
-    
-    return {
-        "title": session.lesson_data['title'],
-        "content": session.lesson_data['content_blocks'],
-        "takeaway": session.lesson_data['practical_takeaway']
-    }
-
-@router.post("/daily-lesson/complete")
-async def complete_lesson(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    res = await db.execute(select(DailySession).filter(DailySession.user_id == current_user.id))
-    session = res.scalars().first()
-    session.lesson_completed = True
-    await db.commit()
-    return {"message": "Lesson completed! +10 XP"}
-
-@router.get("/daily-quiz")
-async def get_daily_quiz(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    res = await db.execute(select(DailySession).filter(DailySession.user_id == current_user.id))
-    session = res.scalars().first()
-    return session.lesson_data['quiz'] # Returns the 3 questions
-
-@router.post("/trigger-daily-pulse")
+@router.post("/trigger-daily-pulse", response_model=TriggerPulseResponse)
 async def trigger_daily_pulse(
     current_user: User = Depends(get_current_user)
 ):
@@ -350,35 +393,60 @@ async def trigger_daily_pulse(
     Manually triggers the AI News & Learning generation 
     for the current user immediately.
     """
+    # Import the Celery task lazily so module import doesn't initialize Celery/Redis
+    from app.worker.tasks import generate_real_daily_content
+
     # .delay() sends it to the Celery Worker queue
-    generate_real_daily_content.delay() 
-    
+    generate_real_daily_content.delay()
+
     return {
         "status": "processing",
         "message": "AI is fetching news and writing your lesson. Check back in 15 seconds."
     }
 
 
+@router.get("/health")
+async def health(
+    db: AsyncSession = Depends(get_db)
+):
+    """Simple health endpoint for developers: returns counts and last-generated timestamps."""
+    # Total articles
+    total_articles_res = await db.execute(select(func.count(NewsArticle.id)))
+    total_articles = int(total_articles_res.scalar() or 0)
+
+    # Last article timestamp
+    last_article_res = await db.execute(select(NewsArticle).order_by(desc(NewsArticle.published_at)).limit(1))
+    last_article = last_article_res.scalars().first()
+    last_article_at = last_article.published_at.isoformat() if last_article and last_article.published_at else None
+
+    # Total daily sessions
+    total_sessions_res = await db.execute(select(func.count(DailySession.id)))
+    total_sessions = int(total_sessions_res.scalar() or 0)
+
+    # Last session date
+    last_session_res = await db.execute(select(DailySession).order_by(desc(DailySession.date)).limit(1))
+    last_session = last_session_res.scalars().first()
+    last_session_date = last_session.date.isoformat() if last_session and getattr(last_session, 'date', None) else None
+
+    return {
+        "total_articles": total_articles,
+        "last_article_published_at": last_article_at,
+        "total_daily_sessions": total_sessions,
+        "last_daily_session_date": last_session_date
+    }
+
+
 # --- GET TODAY'S LESSON ---
-@router.get("/daily-lesson")
+@router.get("/daily-lesson", response_model=DailyLessonResponse)
 async def get_todays_lesson(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Fetch today's session
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    result = await db.execute(
-        select(DailySession).filter(
-            DailySession.user_id == current_user.id,
-            DailySession.date >= today_start
-        )
-    )
-    session = result.scalars().first()
+    session = await get_or_create_daily_session(db, current_user.id)
 
     if not session or not session.lesson_data:
         raise HTTPException(status_code=404, detail="Today's lesson is not ready.")
 
-    # Return only the lesson part of the JSON
     return {
         "title": session.lesson_data.get("title"),
         "content_blocks": session.lesson_data.get("content_blocks"),
@@ -386,20 +454,12 @@ async def get_todays_lesson(
     }
 
 # --- MARK LESSON AS COMPLETE ---
-@router.post("/daily-lesson/complete")
+@router.post("/daily-lesson/complete", response_model=MessageResponse)
 async def complete_lesson(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    result = await db.execute(
-        select(DailySession).filter(DailySession.user_id == current_user.id, DailySession.date >= today_start)
-    )
-    session = result.scalars().first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
+    session = await get_or_create_daily_session(db, current_user.id)
     session.lesson_completed = True
     await db.commit()
     return {"message": "Lesson completed! Progress updated."}
@@ -410,14 +470,10 @@ async def get_todays_quiz(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    result = await db.execute(
-        select(DailySession).filter(DailySession.user_id == current_user.id, DailySession.date >= today_start)
-    )
-    session = result.scalars().first()
+    session = await get_or_create_daily_session(db, current_user.id)
 
     if not session or not session.lesson_data:
         raise HTTPException(status_code=404, detail="Today's quiz is not ready.")
 
-    # Return only the quiz array from the JSON
     return session.lesson_data.get("quiz")
+ 

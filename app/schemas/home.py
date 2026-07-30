@@ -11,15 +11,28 @@ class DailyPulseSchema(BaseModel):
     check_lesson: bool
     check_quiz: bool
 
+
 class NewsCardSchema(BaseModel):
-    id: int
-    image_url: str
-    tag: str
-    headline: str
-    summary: str
-    read_time_minutes: int
-    time_ago: str
-    is_bookmarked: bool
+    id: str
+    title: str
+    summary: Optional[str] = None
+    category: str
+    readTime: str
+    publishedTime: str
+    date: str
+    publisher: Optional[str] = None
+    publishedDate: Optional[str] = None
+    originalUrl: Optional[str] = None
+    imageUrl: Optional[str] = None
+    isBookmarked: bool
+
+
+class NewsArticleSchema(NewsCardSchema):
+    content: Optional[List[Any]] = None
+    keyTakeaways: Optional[List[str]] = None
+    quote: Optional[str] = None
+    sections: Optional[List[Any]] = None
+
 
 class HomeDashboardResponse(BaseModel):
     greeting: str
@@ -31,27 +44,11 @@ class HomeDashboardResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class NewsCardResponse(BaseModel):
-    id: int
-    image_url: str
-    tag: str
-    headline: str
-    summary: Optional[str] = None
-    read_time_minutes: int
-    time_ago: str
-    is_bookmarked: bool
 
+class NewsCardResponse(NewsCardSchema):
     class Config:
         from_attributes = True
 
-class NewsDetailResponse(BaseModel):
-    id: int
-    image_url: str
-    tag: str
-    headline: str
-    published_date: str # e.g., "28 Jun 2026"
-    read_time_minutes: int
-    time_ago: str
-    content_blocks: List[Any]
-    is_bookmarked: bool
-    related_news: List[NewsCardResponse]
+
+class NewsDetailResponse(NewsArticleSchema):
+    relatedNews: List[NewsCardSchema] = []

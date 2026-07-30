@@ -73,18 +73,15 @@ router = APIRouter(prefix="/quizzes", tags=["Interactive Quizzes"])
 #         message=msg
 #     )
 
+from app.services.session_service import get_or_create_daily_session
+
 @router.post("/submit", response_model=QuizResultResponse)
 async def submit_daily_quiz(
     submission: QuizSubmitRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # 1. Fetch today's session
-    today_start = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    result = await db.execute(
-        select(DailySession).filter(DailySession.user_id == current_user.id, DailySession.date >= today_start)
-    )
-    session = result.scalars().first()
+    session = await get_or_create_daily_session(db, current_user.id)
 
     if not session or not session.lesson_data:
         raise HTTPException(status_code=404, detail="No quiz found for today.")

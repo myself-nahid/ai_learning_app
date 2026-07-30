@@ -1,16 +1,18 @@
 import asyncio
-from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
+import logging
 from datetime import datetime
 import random
-# Import instances
+
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
+
 from app.worker.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.db.models import ActivityLog, User, NewsArticle, DailySession
-
-# Import services
 from app.services.news_service import fetch_raw_ai_news
 from app.services.ai_service import transform_news_to_todai_format, generate_lesson_and_quiz
+
+logger = logging.getLogger(__name__)
 
 # HELPER: To run async functions inside synchronous Celery workers
 def run_async(coro):
@@ -67,13 +69,16 @@ async def process_real_daily_pulse_for_all_users():
                 )
 
                 # 5. Save to database using the chosen focus category
+                source_article = raw_articles[0]
                 new_article = NewsArticle(
                     headline=ai_news_data['headline'],
                     summary=ai_news_data['summary'],
                     tag=ai_news_data['tag'],
-                    category=daily_focus, 
+                    category=daily_focus,
                     content_blocks=ai_news_data['content_blocks'],
-                    image_url=raw_articles[0].get('urlToImage'),
+                    image_url=source_article.get('urlToImage'),
+                    publisher=source_article.get('source', {}).get('name'),
+                    original_url=source_article.get('url'),
                     published_at=datetime.utcnow()
                 )
                 db.add(new_article)
@@ -99,11 +104,19 @@ async def process_real_daily_pulse_for_all_users():
                 )
                 db.add(success_log)
                 
-                print(f"Successfully generated Daily Pulse for User: {user.email}")
+                logger.info(
+                    "Successfully generated Daily Pulse for User: %s",
+                    user.email,
+                )
 
             except Exception as e:
-                print(f"Failed to generate content for user {user.id}: {str(e)}")
-                
+                logger.error(
+                    "Failed to generate content for user %d: %s",
+                    user.id,
+                    str(e),
+                    exc_info=True,
+                )
+
                 error_log = ActivityLog(
                     user_id=user.id,
                     action_type="AI_GEN_FAIL",

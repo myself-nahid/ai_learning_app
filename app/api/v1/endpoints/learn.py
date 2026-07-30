@@ -2,16 +2,188 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import math
+from typing import Any, Dict, List, Optional
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, LearningPath, Lesson, UserLessonProgress, WeeklyActivity
+from app.db.models import User, LearningPath, Lesson, UserLessonProgress, WeeklyActivity, NewsArticle
+from app.services.session_service import get_or_create_daily_session
 from app.schemas.learn import (
     LearnDashboardResponse, PathDetailResponse, LessonContentResponse
 )
+from app.schemas.response import (
+    LessonCompleteRequest,
+    LessonCompleteResponse,
+    MessageResponse,
+    ProgressSaveResponse,
+)
 
 router = APIRouter(prefix="/learn", tags=["Learn Section"])
+
+
+def _shorten_title(title: Optional[str], max_length: int = 60) -> str:
+    if not title:
+        return "Today’s topic"
+
+    cleaned = " ".join(title.split())
+    if len(cleaned) <= max_length:
+        return cleaned
+
+    return cleaned[: max_length - 3].rstrip() + "..."
+
+
+def _normalize_topic_label(topic: Optional[str]) -> str:
+    if not topic:
+        return "Today’s topic"
+
+    normalized = topic.strip().lower()
+    if any(keyword in normalized for keyword in ["ai", "generative", "llm", "model"]):
+        return "Generative AI"
+    if any(keyword in normalized for keyword in ["productivity", "workflow", "tool", "software", "app", "notes"]):
+        return "Productivity Tools"
+    if any(keyword in normalized for keyword in ["health", "medical", "medicine", "doctor"]):
+        return "Health & AI"
+    if any(keyword in normalized for keyword in ["finance", "business", "market", "economy"]):
+        return "Business & AI"
+    return topic.strip()
+
+
+def _build_news_learning_context(news_articles: List[NewsArticle]) -> Optional[Dict[str, Any]]:
+    if not news_articles:
+        return None
+
+    article = news_articles[0]
+    headline = (article.headline or "").strip()
+    topic = (article.tag or article.category or headline or "").strip()
+    topic_label = _normalize_topic_label(topic)
+
+    summary_text = (article.summary or "").strip()
+    if not summary_text:
+        summary_text = f"This story highlights {topic_label.lower()} in a practical way."
+
+    display_title = _shorten_title(headline or topic_label)
+
+    return {
+        "path_title": display_title,
+        "lesson_title": display_title,
+        "description": f"Understand the key idea behind {headline or topic_label} and how it connects to everyday work and learning.",
+        "image_url": article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop",
+        "summary": summary_text,
+    }
+
+
+def _normalize_lesson_cards(cards_data: Any) -> List[Dict[str, Any]]:
+    if not cards_data:
+        return []
+    if not isinstance(cards_data, list):
+        return []
+
+    normalized_cards: List[Dict[str, Any]] = []
+    for index, card in enumerate(cards_data, start=1):
+        if not isinstance(card, dict):
+            continue
+
+        if card.get("cardType"):
+            normalized_cards.append({**card, "id": card.get("id") or f"card_{index}"})
+            continue
+
+        card_type = str(card.get("type") or card.get("cardType") or "intro").lower()
+        content = card.get("content") if "content" in card else card
+
+        if card_type in {"intro", "info", "text"}:
+            payload = content if isinstance(content, dict) else {"text": str(content or "")}
+            title = payload.get("title") or payload.get("heading") or "Introduction"
+            body_text = payload.get("text") or payload.get("body") or ""
+            image_url = payload.get("imageUrl") or payload.get("image_url")
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "intro",
+                "title": title,
+                "bodyText": body_text,
+                "imageUrl": image_url,
+            })
+        elif card_type == "example":
+            payload = content if isinstance(content, dict) else {"text": str(content or "")}
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "example",
+                "title": payload.get("heading") or "Example",
+                "exampleData": {
+                    "promptPrefix": payload.get("promptPrefix") or payload.get("prompt") or "",
+                    "predictionWord": payload.get("predictionWord") or payload.get("answer") or "",
+                    "noteText": payload.get("noteText") or payload.get("text") or "",
+                },
+            })
+        elif card_type == "comparison":
+            payload = content if isinstance(content, dict) else {}
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "comparison",
+                "title": payload.get("heading") or "Comparison",
+                "comparisonData": {
+                    "traditionalTitle": payload.get("traditionalTitle") or "Traditional",
+                    "traditionalBullets": payload.get("traditionalBullets") or [],
+                    "aiTitle": payload.get("aiTitle") or "AI",
+                    "aiBullets": payload.get("aiBullets") or [],
+                },
+            })
+        elif card_type == "list":
+            payload = content if isinstance(content, dict) else {}
+            items = payload.get("listItems") or payload.get("listData") or []
+            normalized_items = []
+            for item in items:
+                if isinstance(item, dict):
+                    normalized_items.append(item.get("text") or item.get("label") or "")
+                else:
+                    normalized_items.append(str(item))
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "list",
+                "title": payload.get("heading") or "Key Points",
+                "listItems": normalized_items,
+            })
+        elif card_type == "steps":
+            payload = content if isinstance(content, dict) else {}
+            items = payload.get("stepItems") or payload.get("steps") or []
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "steps",
+                "title": payload.get("heading") or "Steps",
+                "stepItems": items,
+            })
+        elif card_type == "quiz":
+            payload = content if isinstance(content, dict) else {}
+            options = payload.get("options") or []
+            normalized_options = []
+            for option in options:
+                if isinstance(option, dict):
+                    normalized_options.append({
+                        "id": option.get("id") or option.get("label") or "",
+                        "label": option.get("label") or option.get("id") or "",
+                        "text": option.get("text") or option.get("label") or "",
+                    })
+                else:
+                    normalized_options.append({"id": str(len(normalized_options)), "label": str(len(normalized_options)), "text": str(option)})
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "quiz",
+                "title": payload.get("heading") or "Check Your Knowledge",
+                "quizData": {
+                    "question": payload.get("question") or payload.get("content", {}).get("question") or "",
+                    "options": normalized_options,
+                    "correctOptionId": payload.get("correctOptionId") or payload.get("correct_answer") or payload.get("correctOption") or "",
+                },
+            })
+        else:
+            normalized_cards.append({
+                "id": f"card_{index}",
+                "cardType": "intro",
+                "title": "Content",
+                "bodyText": str(content or ""),
+            })
+
+    return normalized_cards
 
 # 1. GET LEARN DASHBOARD (Screen 1)
 @router.get("/dashboard", response_model=LearnDashboardResponse)
@@ -19,65 +191,190 @@ async def get_learn_dashboard(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Fetch Weekly Activity (Mocked calculation for brevity)
-    # In production, find the current week's Monday and fetch WeeklyActivity
+    today = datetime.utcnow().date()
+    # Get Monday of this week
+    week_start = today - timedelta(days=today.weekday())
+
+    # --- Real WeeklyActivity ---
+    wa_res = await db.execute(
+        select(WeeklyActivity).filter(
+            WeeklyActivity.user_id == current_user.id,
+            WeeklyActivity.week_start_date >= datetime(week_start.year, week_start.month, week_start.day)
+        ).order_by(WeeklyActivity.week_start_date.desc())
+    )
+    wa = wa_res.scalars().first()
+
+    if wa:
+        days_active = wa.days_active or {}
+        lessons_completed = wa.total_lessons_this_week or 0
+        minutes_spent = wa.total_minutes_this_week or 0
+    else:
+        days_active = {"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False}
+        lessons_completed = 0
+        minutes_spent = 0
+
+    # Calculate streak from days_active (M→Su order)
+    day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    today_idx = today.weekday()  # 0=Mon, 6=Sun
+    streak_days = 0
+    for i in range(today_idx, -1, -1):
+        if days_active.get(day_order[i], False):
+            streak_days += 1
+        else:
+            break
+
     weekly_stats = {
-        "lessons_completed": 4,
-        "minutes_spent": 28,
-        "streak_days": 4,
-        "days_active": {"mon": True, "tue": True, "wed": True, "thu": True, "fri": False, "sat": False, "sun": False}
+        "lessons_completed": lessons_completed,
+        "minutes_spent": minutes_spent,
+        "streak_days": streak_days,
+        "days_active": days_active
     }
 
-    # Fetch "Continue Learning" (Most recently accessed in_progress lesson)
-    prog_res = await db.execute(
-        select(UserLessonProgress)
-        .filter(UserLessonProgress.user_id == current_user.id, UserLessonProgress.status == "in_progress")
-        .order_by(UserLessonProgress.last_accessed.desc())
+    news_res = await db.execute(
+        select(NewsArticle)
+        .order_by(NewsArticle.published_at.desc())
+        .limit(3)
     )
-    active_progress = prog_res.scalars().first()
-    
+    latest_news = news_res.scalars().all()
+    news_context = _build_news_learning_context(latest_news)
+
+    # Fetch all Paths with lessons loaded
+    paths_res = await db.execute(select(LearningPath).options(selectinload(LearningPath.lessons)))
+    paths = paths_res.scalars().all()
+
+    # Get all user progress records at once
+    all_prog_res = await db.execute(
+        select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id)
+    )
+    all_progress = all_prog_res.scalars().all()
+    completed_lesson_ids = {prog.lesson_id for prog in all_progress if prog.status == "completed"}
+
+    # --- Continue Learning ---
+    # Find active in_progress record for a lesson that is NOT completed
+    active_progress = None
+    for prog in sorted(all_progress, key=lambda x: x.last_accessed or datetime.min, reverse=True):
+        if prog.status == "in_progress" and prog.lesson_id not in completed_lesson_ids:
+            active_progress = prog
+            break
+            
     continue_learning = None
     if active_progress:
-        # Load associated lesson and path
         lesson_res = await db.execute(select(Lesson).filter(Lesson.id == active_progress.lesson_id))
         lesson = lesson_res.scalars().first()
         path_res = await db.execute(select(LearningPath).filter(LearningPath.id == active_progress.path_id))
         path = path_res.scalars().first()
         
-        total_cards = len(lesson.cards_data)
+        if lesson and path:
+            total_cards = len(lesson.cards_data) if lesson.cards_data else 1
+            continue_learning = {
+                "path_id": path.id,
+                "lesson_id": lesson.id,
+                "title": lesson.title,
+                "path_title": path.title,
+                "completed_cards": active_progress.cards_completed or 0,
+                "total_cards": total_cards,
+                "image_url": path.image_url
+            }
+
+    if news_context and not continue_learning:
         continue_learning = {
-            "lesson_id": lesson.id,
-            "path_title": path.title,
-            "lesson_title": lesson.title,
-            "progress_percentage": int((active_progress.cards_completed / total_cards) * 100),
-            "cards_completed": active_progress.cards_completed,
-            "total_cards": total_cards,
-            "minutes_remaining": max(1, lesson.estimated_minutes - int((active_progress.cards_completed/total_cards)*lesson.estimated_minutes)),
-            "image_url": path.image_url
+            "path_id": 0,
+            "lesson_id": 0,
+            "title": news_context["lesson_title"],
+            "path_title": news_context["path_title"],
+            "completed_cards": 0,
+            "total_cards": 5,
+            "image_url": news_context["image_url"],
         }
 
-    # Fetch Paths
-    paths_res = await db.execute(select(LearningPath))
-    paths = paths_res.scalars().all()
-    
-    # Format Paths (In production, calculate progress per path)
+    # Fallback for continue_learning if no in_progress record
+    if not continue_learning and len(paths) > 0:
+        found_les = None
+        found_path = None
+        for p in paths:
+            sorted_les = sorted(p.lessons, key=lambda x: x.sequence_order)
+            for les in sorted_les:
+                if les.id not in completed_lesson_ids:
+                    found_les = les
+                    found_path = p
+                    break
+            if found_les:
+                break
+
+        if found_les and found_path:
+            total_cards = len(found_les.cards_data) if found_les.cards_data else 1
+            continue_learning = {
+                "path_id": found_path.id,
+                "lesson_id": found_les.id,
+                "title": found_les.title,
+                "path_title": found_path.title,
+                "completed_cards": 0,
+                "total_cards": total_cards,
+                "image_url": found_path.image_url
+            }
+        elif len(paths) > 0 and len(paths[0].lessons) > 0:
+            last_p = paths[0]
+            last_l = sorted(last_p.lessons, key=lambda x: x.sequence_order)[-1]
+            total_cards = len(last_l.cards_data) if last_l.cards_data else 1
+            continue_learning = {
+                "path_id": last_p.id,
+                "lesson_id": last_l.id,
+                "title": last_l.title,
+                "path_title": last_p.title,
+                "completed_cards": total_cards,
+                "total_cards": total_cards,
+                "image_url": last_p.image_url
+            }
+
     learning_paths = []
-    for p in paths:
+    if news_context:
         learning_paths.append({
-            "path_id": p.id, "title": p.title, "level": p.level,
-            "total_lessons": p.total_lessons, "total_minutes": p.total_minutes,
-            "progress_percentage": 40, # Mocked
-            "image_url": p.image_url
+            "path_id": 0,
+            "title": news_context["path_title"],
+            "level": "Beginner",
+            "total_lessons": 1,
+            "total_minutes": 5,
+            "progress_percentage": 0,
+            "image_url": news_context["image_url"],
+        })
+
+    if not news_context:
+        for p in paths:
+            actual_total = len(p.lessons) if p.lessons else (p.total_lessons or 1)
+            path_completed = sum(1 for prog in all_progress if prog.path_id == p.id and prog.status == "completed")
+            progress_pct = int((path_completed / actual_total) * 100) if actual_total > 0 else 0
+            total_mins = sum(les.estimated_minutes for les in p.lessons) if p.lessons else p.total_minutes
+            learning_paths.append({
+                "path_id": p.id, "title": p.title, "level": p.level,
+                "total_lessons": actual_total, "total_minutes": total_mins,
+                "progress_percentage": progress_pct,
+                "image_url": p.image_url
+            })
+
+    # --- Fetch Recommended Lessons ---
+    recommended_lessons = []
+    if news_context:
+        recommended_lessons.append({
+            "id": 0,
+            "lesson_id": 0,
+            "path_id": 0,
+            "title": news_context["lesson_title"],
+            "description": news_context["description"],
+            "level": "Beginner",
+            "duration": "5 min",
+            "category": news_context["path_title"],
+            "image_url": news_context["image_url"],
         })
 
     return {
         "weekly_stats": weekly_stats,
         "continue_learning": continue_learning,
         "learning_paths": learning_paths,
-        "recommended_lessons": []
+        "recommended_lessons": recommended_lessons
     }
 
 # 2. GET PATH DETAILS (Screen 2)
+@router.get("/path/{path_id}", response_model=PathDetailResponse)
 @router.get("/paths/{path_id}", response_model=PathDetailResponse)
 async def get_path_details(
     path_id: int,
@@ -92,36 +389,54 @@ async def get_path_details(
     prog_res = await db.execute(select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id, UserLessonProgress.path_id == path_id))
     progress_map = {p.lesson_id: p for p in prog_res.scalars().all()}
 
-    formatted_lessons = []
-    for lesson in path.lessons:
-        prog = progress_map.get(lesson.id)
-        # Default status logic: Lesson 1 is unlocked, others are locked
-        status = "locked"
-        cards_done = 0
-        if prog:
-            status = prog.status
-            cards_done = prog.cards_completed
-        elif lesson.sequence_order == 1:
-            status = "in_progress" # Auto-unlock first lesson
+    sorted_lessons = sorted(path.lessons, key=lambda x: x.sequence_order)
 
+    formatted_lessons = []
+    completed_count = 0
+
+    for idx, lesson in enumerate(sorted_lessons):
+        prog = progress_map.get(lesson.id)
+        cards_done = 0
+
+        if prog and prog.status == "completed":
+            status = "completed"
+            cards_done = len(lesson.cards_data) if lesson.cards_data else 5
+            completed_count += 1
+        elif prog and prog.status == "in_progress":
+            status = "in_progress"
+            cards_done = prog.cards_completed or 0
+        else:
+            # Sequential unlock: Lesson 1 or if previous lesson is completed
+            prev_lesson = sorted_lessons[idx - 1] if idx > 0 else None
+            prev_prog = progress_map.get(prev_lesson.id) if prev_lesson else None
+            if idx == 0 or (prev_prog and prev_prog.status == "completed"):
+                status = "in_progress"
+            else:
+                status = "locked"
+
+        total_c = len(lesson.cards_data) if lesson.cards_data else 5
         formatted_lessons.append({
             "lesson_id": lesson.id,
             "sequence_order": lesson.sequence_order,
             "title": lesson.title,
             "description": lesson.description,
-            "total_cards": len(lesson.cards_data),
+            "total_cards": total_c,
             "cards_completed": cards_done,
             "estimated_minutes": lesson.estimated_minutes,
             "status": status
         })
 
+    total_lessons = len(sorted_lessons) or 1
+    progress_pct = int((completed_count / total_lessons) * 100)
+
     return {
         "path_id": path.id, "title": path.title, "description": path.description,
-        "level": path.level, "progress_percentage": 40,
+        "level": path.level, "progress_percentage": progress_pct,
         "lessons": formatted_lessons
     }
 
 # 3. START/RESUME LESSON (Screens 3-8)
+@router.get("/lesson/{lesson_id}", response_model=LessonContentResponse)
 @router.get("/lessons/{lesson_id}", response_model=LessonContentResponse)
 async def get_lesson_content(
     lesson_id: int,
@@ -148,27 +463,27 @@ async def get_lesson_content(
             user_id=current_user.id, 
             lesson_id=lesson.id, 
             path_id=lesson.path_id, 
+            cards_completed=0,
             status="in_progress"
         )
         db.add(progress)
         await db.commit()
-        
-        # --- FIX ADDED HERE ---
-        # Reload the objects so they aren't 'expired' by the commit!
         await db.refresh(lesson)
         await db.refresh(progress)
-        # ----------------------
+
+    total_cards = len(lesson.cards_data) if lesson.cards_data else 0
+    cards_done = progress.cards_completed if progress and progress.cards_completed is not None else 0
 
     return {
         "lesson_id": lesson.id,
+        "path_id": lesson.path_id,
         "title": lesson.title,
-        "total_cards": len(lesson.cards_data),
-        "current_card_index": progress.cards_completed,
-        "cards": lesson.cards_data
+        "estimated_minutes": lesson.estimated_minutes or 5,
+        "cards": _normalize_lesson_cards(lesson.cards_data)
     }
 
 # 4. SAVE CARD PROGRESS (As user taps "Continue")
-@router.post("/lessons/{lesson_id}/progress")
+@router.post("/lessons/{lesson_id}/progress", response_model=ProgressSaveResponse)
 async def update_lesson_progress(
     lesson_id: int,
     card_index: int, # The index of the card they just finished reading
@@ -186,37 +501,116 @@ async def update_lesson_progress(
     return {"status": "saved"}
 
 # 5. COMPLETE LESSON (Screen 8 action)
-@router.post("/lessons/{lesson_id}/complete")
+@router.post("/lesson/{lesson_id}/complete", response_model=LessonCompleteResponse)
+@router.post("/lessons/{lesson_id}/complete", response_model=LessonCompleteResponse)
 async def complete_lesson(
     lesson_id: int,
+    payload: LessonCompleteRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if payload.lesson_id != lesson_id:
+        lesson_id = payload.lesson_id
+
     # Mark current lesson as completed
-    prog_res = await db.execute(select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id, UserLessonProgress.lesson_id == lesson_id))
-    progress = prog_res.scalars().first()
-    progress.status = "completed"
+    prog_res = await db.execute(
+        select(UserLessonProgress).filter(
+            UserLessonProgress.user_id == current_user.id,
+            UserLessonProgress.lesson_id == lesson_id
+        )
+    )
+    progs = prog_res.scalars().all()
+    if progs:
+        for p in progs:
+            p.status = "completed"
+            p.last_accessed = datetime.utcnow()
+    else:
+        p = UserLessonProgress(
+            user_id=current_user.id,
+            lesson_id=lesson_id,
+            status="completed"
+        )
+        db.add(p)
+        progs = [p]
     
     # Unlock Next Lesson Logic
     lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
     current_lesson = lesson_res.scalars().first()
     
-    next_lesson_res = await db.execute(
-        select(Lesson).filter(Lesson.path_id == current_lesson.path_id, Lesson.sequence_order == current_lesson.sequence_order + 1)
-    )
-    next_lesson = next_lesson_res.scalars().first()
-    
-    if next_lesson:
-        new_prog = UserLessonProgress(user_id=current_user.id, lesson_id=next_lesson.id, path_id=next_lesson.path_id, status="in_progress")
-        db.add(new_prog)
+    if current_lesson:
+        for p in progs:
+            if not p.path_id:
+                p.path_id = current_lesson.path_id
 
-    # In production: Update WeeklyActivity and XP/Streak here!
+        next_lesson_res = await db.execute(
+            select(Lesson).filter(Lesson.path_id == current_lesson.path_id, Lesson.sequence_order == current_lesson.sequence_order + 1)
+        )
+        next_lesson = next_lesson_res.scalars().first()
+        
+        if next_lesson:
+            next_prog_res = await db.execute(
+                select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id, UserLessonProgress.lesson_id == next_lesson.id)
+            )
+            next_prog = next_prog_res.scalars().first()
+            if next_prog:
+                if next_prog.status != "completed":
+                    next_prog.status = "in_progress"
+                    next_prog.last_accessed = datetime.utcnow()
+            else:
+                new_prog = UserLessonProgress(
+                    user_id=current_user.id,
+                    lesson_id=next_lesson.id,
+                    path_id=next_lesson.path_id,
+                    status="in_progress"
+                )
+                db.add(new_prog)
+
+    # Update DailySession for /home/dashboard pulse task completion
+    daily_session = await get_or_create_daily_session(db, current_user.id)
+    daily_session.lesson_completed = True
+
+    # Update WeeklyActivity
+    today = datetime.utcnow().date()
+    week_start = today - timedelta(days=today.weekday())
+    week_start_dt = datetime(week_start.year, week_start.month, week_start.day)
+    day_keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    today_key = day_keys[today.weekday()]
+
+    wa_res = await db.execute(
+        select(WeeklyActivity).filter(
+            WeeklyActivity.user_id == current_user.id,
+            WeeklyActivity.week_start_date >= week_start_dt
+        )
+    )
+    wa = wa_res.scalars().first()
+    
+    if wa:
+        days_active = dict(wa.days_active or {})
+        days_active[today_key] = True
+        wa.days_active = days_active
+        wa.total_lessons_this_week = (wa.total_lessons_this_week or 0) + 1
+        wa.total_minutes_this_week = (wa.total_minutes_this_week or 0) + (current_lesson.estimated_minutes if current_lesson else 5)
+    else:
+        days_active = {"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False}
+        days_active[today_key] = True
+        wa = WeeklyActivity(
+            user_id=current_user.id,
+            week_start_date=week_start_dt,
+            days_active=days_active,
+            total_lessons_this_week=1,
+            total_minutes_this_week=current_lesson.estimated_minutes if current_lesson else 5
+        )
+        db.add(wa)
 
     await db.commit()
-    return {"status": "success", "message": "Lesson completed and next lesson unlocked!"}
+    return {
+        "message": "Lesson completed successfully!",
+        "streak_updated": True,
+        "pulse_updated": True,
+    }
 
 
-@router.post("/test/seed-learn-data")
+@router.post("/test/seed-learn-data", response_model=MessageResponse)
 async def seed_learn_data(db: AsyncSession = Depends(get_db)):
     # 1. Create a Learning Path
     path = LearningPath(

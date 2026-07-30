@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   db:
     image: postgres:15-alpine
@@ -50,6 +48,7 @@ services:
       - .env  # <--- CRITICAL: This allows the worker to see your REAL OpenAI Key
     environment:
       - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - db
@@ -64,9 +63,12 @@ services:
     env_file:
       - .env
     environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
+      - db
     command: celery -A app.worker.celery_app beat --loglevel=info
 
 volumes:

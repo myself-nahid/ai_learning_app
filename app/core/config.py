@@ -31,13 +31,20 @@ class Settings(BaseSettings):
     # News API Key
     NEWS_API_KEY: str
 
+    DATABASE_URL: str | None = None
+
     @property
     def ASYNC_DATABASE_URI(self) -> str:
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
         # Connection string for asyncpg
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     class Config:
         env_file = ".env"
         from_attributes = True
+        extra = "ignore"
 
 settings = Settings()

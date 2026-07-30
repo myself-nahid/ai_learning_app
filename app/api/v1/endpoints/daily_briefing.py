@@ -12,28 +12,31 @@ from app.schemas.daily_briefing import (
 
 router = APIRouter(prefix="/daily-briefing", tags=["Push Notification Flow"])
 
+from app.services.session_service import get_or_create_daily_session
+
 # 1. GET THE FULL SEQUENCE (Loads instantly on App open)
 @router.get("/sequence", response_model=DailyBriefingSequenceResponse)
 async def get_briefing_sequence(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Fetch today's session
-    session_res = await db.execute(select(DailySession).filter(
-        DailySession.user_id == current_user.id, DailySession.date >= today_start
-    ))
-    session = session_res.scalars().first()
-
-    if not session:
-        raise HTTPException(status_code=404, detail="Today's briefing is still generating.")
+    session = await get_or_create_daily_session(db, current_user.id)
 
     sequence_items = []
 
     # A. Append News Articles
-    news_res = await db.execute(select(NewsArticle).filter(NewsArticle.id.in_(session.assigned_news_ids)))
-    articles = news_res.scalars().all()
+    articles = []
+    if session.assigned_news_ids:
+        news_res = await db.execute(select(NewsArticle).filter(NewsArticle.id.in_(session.assigned_news_ids)))
+        articles = news_res.scalars().all()
+    
+    if not articles:
+        # Grab top 3 latest news articles
+        news_res = await db.execute(select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(3))
+        articles = news_res.scalars().all()
+        session.assigned_news_ids = [art.id for art in articles]
+        await db.commit()
+
     for art in articles:
         sequence_items.append(SequenceItem(
             type="news",
@@ -49,6 +52,23 @@ async def get_briefing_sequence(
         sequence_items.append(SequenceItem(
             type="quiz",
             data={"questions": session.lesson_data["quiz"]}
+        ))
+    else:
+        default_quiz = [
+            {
+                "question": "Which of the following best describes an AI model's prediction process?",
+                "options": {
+                    "A": "Searching a hardcoded database",
+                    "B": "Predicting token probability patterns",
+                    "C": "Copying text directly from websites",
+                    "D": "Executing manual calculations"
+                },
+                "correct_option": "B"
+            }
+        ]
+        sequence_items.append(SequenceItem(
+            type="quiz",
+            data={"questions": default_quiz}
         ))
 
     return DailyBriefingSequenceResponse(session_id=session.id, items=sequence_items)

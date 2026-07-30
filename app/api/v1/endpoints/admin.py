@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_db, get_current_admin
 from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress
 from app.schemas.admin import AdminDashboardResponse, AdminProfileResponse, AdminProfileUpdate, AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem, AdminUserListResponse, AppSettingsSchema, AppSettingsUpdate, KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest
+from app.schemas.response import ImageUploadResponse, MessageResponse, SuspendActionResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
 import os
 import shutil
@@ -222,7 +223,7 @@ async def get_user_details(
     )
 
 # 3. ACTION: SUSPEND / UNSUSPEND USER
-@router.patch("/users/{user_id}/suspend")
+@router.patch("/users/{user_id}/suspend", response_model=SuspendActionResponse)
 async def toggle_suspend_user(
     user_id: int, 
     data: SuspendUserRequest, 
@@ -244,7 +245,7 @@ async def toggle_suspend_user(
     return {"message": f"User successfully {action.lower()}."}
 
 # 4. ACTION: SEND RESET PASSWORD EMAIL
-@router.post("/users/{user_id}/reset-password")
+@router.post("/users/{user_id}/reset-password", response_model=MessageResponse)
 async def admin_reset_user_password(
     user_id: int, 
     background_tasks: BackgroundTasks, 
@@ -276,7 +277,7 @@ async def admin_reset_user_password(
     return {"message": "Password reset email sent to user."}
 
 # 5. ACTION: RESET PROGRESS
-@router.post("/users/{user_id}/reset-progress")
+@router.post("/users/{user_id}/reset-progress", response_model=MessageResponse)
 async def reset_user_progress(
     user_id: int, 
     db: AsyncSession = Depends(get_db), 
@@ -310,7 +311,7 @@ async def reset_user_progress(
     return {"message": "User's progress has been permanently reset."}
 
 # 6. ACTION: DELETE USER
-@router.delete("/users/{user_id}")
+@router.delete("/users/{user_id}", response_model=MessageResponse)
 async def delete_user(
     user_id: int, 
     db: AsyncSession = Depends(get_db), 
@@ -386,7 +387,7 @@ async def update_admin_profile(
         "profile_image": image_url
     }
 
-@router.post("/profile/upload-image")
+@router.post("/profile/upload-image", response_model=ImageUploadResponse)
 async def upload_admin_image(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),

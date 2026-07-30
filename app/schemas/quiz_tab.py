@@ -9,12 +9,16 @@ class QuizProgressStats(BaseModel):
     day_streak: int
 
 class ContinueQuizSchema(BaseModel):
-    attempt_id: int
-    category: str
-    quiz_title: str
-    current_question: int
-    total_questions: int
-    progress_percentage: int
+    card_type: str = "continue" # "continue", "recommended", "all_completed"
+    attempt_id: Optional[int] = None
+    quiz_set_id: Optional[int] = None
+    category: Optional[str] = None
+    quiz_title: Optional[str] = None
+    current_question: Optional[int] = None
+    total_questions: Optional[int] = None
+    progress_percentage: Optional[int] = 0
+    estimated_minutes: Optional[int] = 5
+    total_completed_sets: Optional[int] = 0
 
 class QuizSetCardSchema(BaseModel):
     quiz_set_id: int
@@ -32,6 +36,7 @@ class QuizDashboardResponse(BaseModel):
     stats: QuizProgressStats
     continue_quiz: Optional[ContinueQuizSchema]
     categories: Dict[str, List[QuizSetCardSchema]] # Groups sets by Category (e.g. "Robotics")
+    all_categories: List[str] = ["For You", "Trending", "Robotics", "Generative AI", "Tools", "Research", "Sports", "Politics"]
 
 # --- SCREEN 3: TAKE QUIZ ---
 class QuizQuestionSchema(BaseModel):

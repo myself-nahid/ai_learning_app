@@ -86,26 +86,6 @@ class DailyFeed(Base):
     
     user = relationship("User")
 
-# class QuizAttempt(Base):
-#     __tablename__ = "quiz_attempts"
-
-#     id = Column(Integer, primary_key=True, index=True)
-#     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-#     daily_feed_id = Column(Integer, ForeignKey("daily_feeds.id"), nullable=False)
-    
-#     score = Column(Integer, nullable=False) # e.g., 2 (meaning 2 out of 3 correct)
-#     total_questions = Column(Integer, nullable=False)
-    
-#     # Store what the user actually submitted to show them later if needed
-#     user_answers = Column(JSON, nullable=False) 
-    
-#     attempted_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-#     # Relationships
-#     user = relationship("User")
-#     daily_feed = relationship("DailyFeed")
-
-# 1. News Articles (Generated daily by your Celery Worker/AI)
 class NewsArticle(Base):
     __tablename__ = "news_articles"
 
@@ -117,6 +97,8 @@ class NewsArticle(Base):
     content_blocks = Column(JSON, nullable=False) 
     
     image_url = Column(String, nullable=True)
+    publisher = Column(String, nullable=True)
+    original_url = Column(String, nullable=True)
     tag = Column(String, nullable=False) # e.g., "Generative AI"
     category = Column(String, nullable=False) # e.g., "Tools", "Research", "Trending"
     
@@ -266,3 +248,15 @@ class AppSettings(Base):
     account_deletion_policy = Column(String, default="Account deletion instructions...")
     
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+    type = Column(String, default="news") # 'news', 'pulse', 'quiz', 'system'
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
