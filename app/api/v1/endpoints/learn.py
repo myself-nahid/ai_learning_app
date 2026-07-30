@@ -168,7 +168,8 @@ async def _ensure_news_learning_path(
     """
     headline = (article.headline or "").strip()
     topic_label = _normalize_topic_label(article.tag or article.category or headline)
-    display_title = _shorten_title(headline, 55)
+    short_headline = _shorten_title(headline, 50)
+    display_title = short_headline if topic_label.lower() in short_headline.lower() else f"{topic_label}: {short_headline}"
     image_url = article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop"
     description = (article.summary or f"Learn about {topic_label} and how it applies to your work.").strip()
 
@@ -327,7 +328,14 @@ def _normalize_lesson_cards(cards_data: Any) -> List[Dict[str, Any]]:
             })
         elif card_type == "quiz":
             payload = content if isinstance(content, dict) else {}
-            options = payload.get("options") or []
+            content_dict = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+            question_text = (
+                payload.get("question")
+                or content_dict.get("question")
+                or (str(payload.get("content")) if isinstance(payload.get("content"), str) else "")
+                or ""
+            )
+            options = payload.get("options") or content_dict.get("options") or []
             normalized_options = []
             for option in options:
                 if isinstance(option, dict):
@@ -337,15 +345,29 @@ def _normalize_lesson_cards(cards_data: Any) -> List[Dict[str, Any]]:
                         "text": option.get("text") or option.get("label") or "",
                     })
                 else:
-                    normalized_options.append({"id": str(len(normalized_options)), "label": str(len(normalized_options)), "text": str(option)})
+                    normalized_options.append({
+                        "id": str(len(normalized_options)),
+                        "label": str(len(normalized_options)),
+                        "text": str(option)
+                    })
+
+            correct_ans = (
+                payload.get("correctOptionId")
+                or payload.get("correct_answer")
+                or payload.get("correctOption")
+                or payload.get("correct_option_key")
+                or content_dict.get("correct_answer")
+                or ""
+            )
+
             normalized_cards.append({
                 "id": f"card_{index}",
                 "cardType": "quiz",
-                "title": payload.get("heading") or "Check Your Knowledge",
+                "title": payload.get("heading") or content_dict.get("heading") or "Check Your Knowledge",
                 "quizData": {
-                    "question": payload.get("question") or payload.get("content", {}).get("question") or "",
+                    "question": question_text,
                     "options": normalized_options,
-                    "correctOptionId": payload.get("correctOptionId") or payload.get("correct_answer") or payload.get("correctOption") or "",
+                    "correctOptionId": correct_ans,
                 },
             })
         else:
