@@ -75,3 +75,6 @@ tests
 
 ## ignore firebase service account key files
 *.json
+
+# Ignore Celery beat schedule files
+celerybeat-schedule*

@@ -85,14 +85,17 @@ def _is_relevant_ai_article(article: dict, query: str) -> bool:
 
 async def fetch_raw_ai_news(query: str):
     """
-    Fetches raw headlines from NewsAPI.org
+    Fetches raw headlines from NewsAPI.org with robust query fallback
     """
     url = "https://newsapi.org/v2/everything"
+    clean_query = query.replace('"', '').strip()
+    
+    # Primary search query
     params = {
-        "q": f'"{query}" AND (AI OR "artificial intelligence" OR "generative AI" OR "machine learning" OR "deep learning" OR OpenAI OR ChatGPT OR LLM OR "large language model")',
+        "q": f'{clean_query} AND (AI OR "artificial intelligence" OR technology OR OpenAI OR ChatGPT)',
         "sortBy": "publishedAt",
         "language": "en",
-        "pageSize": 5, # We only need the top 5 to select the best 1
+        "pageSize": 10,
         "apiKey": settings.NEWS_API_KEY
     }
     
@@ -105,53 +108,106 @@ async def fetch_raw_ai_news(query: str):
                 data = response.json()
 
                 if data.get("status") == "ok" and data.get("articles"):
+                    articles = data["articles"]
                     relevant_articles = [
-                        article for article in data["articles"]
-                        if _is_relevant_ai_article(article, query)
+                        article for article in articles
+                        if article.get("title") and "[Removed]" not in article.get("title")
                     ]
-                    logger.info(
-                        "Fetched %d news articles for query '%s' (%d relevant)",
-                        len(data["articles"]),
-                        query,
-                        len(relevant_articles),
-                    )
-                    return relevant_articles
+                    if relevant_articles:
+                        logger.info("Fetched %d live news articles from NewsAPI for '%s'", len(relevant_articles), query)
+                        return relevant_articles
+
+                # Fallback to broader query if primary returned 0 articles
+                params["q"] = "artificial intelligence OR OpenAI OR ChatGPT OR LLM"
+                response = await client.get(url, params=params, timeout=15.0)
+                data = response.json()
+                if data.get("status") == "ok" and data.get("articles"):
+                    articles = [a for a in data["articles"] if a.get("title") and "[Removed]" not in a.get("title")]
+                    return articles
                 return []
         except httpx.TimeoutException as e:
             last_exception = e
-            logger.warning(
-                "NewsAPI timeout for query '%s' (attempt %d/%d)",
-                query,
-                attempt + 1,
-                MAX_RETRIES,
-            )
+            logger.warning("NewsAPI timeout for query '%s' (attempt %d/%d)", query, attempt + 1, MAX_RETRIES)
         except httpx.HTTPStatusError as e:
             last_exception = e
-            logger.warning(
-                "NewsAPI HTTP error %d for query '%s' (attempt %d/%d)",
-                e.response.status_code,
-                query,
-                attempt + 1,
-                MAX_RETRIES,
-            )
+            logger.warning("NewsAPI HTTP error %d for query '%s' (attempt %d/%d)", e.response.status_code, query, attempt + 1, MAX_RETRIES)
         except Exception as e:
             last_exception = e
-            logger.warning(
-                "NewsAPI request failed for query '%s' (attempt %d/%d): %s",
-                query,
-                attempt + 1,
-                MAX_RETRIES,
-                str(e),
-            )
+            logger.warning("NewsAPI request failed for query '%s' (attempt %d/%d): %s", query, attempt + 1, MAX_RETRIES, str(e))
 
         if attempt < MAX_RETRIES - 1:
             wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
             await asyncio.sleep(wait_time)
 
-    logger.error(
-        "NewsAPI request failed after %d attempts for query '%s': %s",
-        MAX_RETRIES,
-        query,
-        str(last_exception),
-    )
     return []
+
+
+async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_articles: int = 15):
+    """
+    Fetches real live news articles from NewsAPI and uses OpenAI to rewrite them into TodAI format.
+    Stores the results directly in the database.
+    """
+    from datetime import datetime
+    from sqlalchemy.future import select
+    from app.db.models import NewsArticle
+    from app.services.ai_service import transform_news_to_todai_format
+
+    if not topics:
+        topics = ["Generative AI", "Artificial Intelligence", "Machine Learning", "AI Tools", "Technology"]
+
+    created_articles = []
+    for topic in topics:
+        if len(created_articles) >= max_articles:
+            break
+
+        raw_articles = await fetch_raw_ai_news(topic)
+        for raw in raw_articles:
+            if len(created_articles) >= max_articles:
+                break
+            
+            title = raw.get("title")
+            if not title or "[Removed]" in title:
+                continue
+
+            # Check duplicate in DB by headline or title
+            dup_check = await db.execute(select(NewsArticle).filter(NewsArticle.headline == title))
+            if dup_check.scalars().first():
+                continue
+
+            try:
+                ai_news = await transform_news_to_todai_format(raw, topic)
+                content_blocks = ai_news.get("content_blocks")
+                if not isinstance(content_blocks, list):
+                    content_blocks = [
+                        {"type": "paragraph", "text": raw.get("description") or title},
+                        {"type": "takeaway", "items": ai_news.get("takeaways") or ai_news.get("points") or [title]},
+                        {"type": "quote", "text": raw.get("description") or title, "author": raw.get("source", {}).get("name") or "NewsAPI"}
+                    ]
+
+                image_url = raw.get("urlToImage") or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+
+                new_article = NewsArticle(
+                    headline=ai_news.get("headline") or title,
+                    summary=ai_news.get("summary") or raw.get("description") or title,
+                    tag=ai_news.get("tag") or topic,
+                    category=topic,
+                    content_blocks=content_blocks,
+                    image_url=image_url,
+                    publisher=raw.get("source", {}).get("name") or "NewsAPI",
+                    original_url=raw.get("url") or "https://newsapi.org",
+                    read_time_minutes=3,
+                    published_at=datetime.utcnow()
+                )
+                db.add(new_article)
+                await db.flush()
+                created_articles.append(new_article)
+            except Exception as e:
+                logger.error("Failed to transform live article '%s' via OpenAI: %s", title, str(e))
+                continue
+
+    if created_articles:
+        await db.commit()
+        logger.info("Successfully created %d live AI news articles via NewsAPI & OpenAI!", len(created_articles))
+
+    return created_articles
+

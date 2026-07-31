@@ -2,7 +2,8 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.future import select
 from app.db.session import SessionLocal, engine
-from app.db.models import LearningPath, Lesson, QuizSet, QuizQuestion
+from app.db.models import LearningPath, Lesson, QuizSet, QuizQuestion, NewsArticle
+
 
 logger = logging.getLogger(__name__)
 
@@ -454,3 +455,5 @@ async def init_db():
         await seed_learning_data(db)
         await seed_quiz_data(db)
     logger.info("Database initialization check complete.")
+
+

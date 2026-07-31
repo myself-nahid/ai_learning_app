@@ -1,8 +1,12 @@
 from typing import List
+from pydantic import BaseModel
+
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
 from sqlalchemy.future import select
+
 from sqlalchemy.orm import selectinload
 from app.core.config import settings 
 from app.api.deps import get_db, get_current_user
@@ -43,12 +47,20 @@ async def complete_onboarding(
         primary_goal=data.primary_goal,
     )
     
+    # Ensure live news articles exist in DB (auto-generate via NewsAPI & OpenAI if empty or count < 10)
+    count_res = await db.execute(select(func.count(NewsArticle.id)))
+    if (count_res.scalar() or 0) < 10:
+        from app.services.news_service import fetch_and_generate_live_news_for_user
+        await fetch_and_generate_live_news_for_user(db, data.interests)
+
+
     await db.commit()
     
     return {
         "status": "success",
         "message": "Personalized feed ready! Welcome to TodAI."
     }
+
 
 # @router.get("/me", response_model=UserResponse)
 # async def get_my_profile(
@@ -233,8 +245,6 @@ async def get_privacy(db: AsyncSession = Depends(get_db)):
         "title": "Privacy Policy",
         "content": app_config.privacy_policy if app_config else "Coming soon."
     }
-
-from pydantic import BaseModel
 
 class DeviceTokenRequest(BaseModel):
     fcm_token: str

@@ -41,36 +41,49 @@ async def _call_openai_with_retry(prompt: str, max_retries: int = MAX_RETRIES):
                 logger.info("Retrying in %d seconds...", wait_time)
                 await asyncio.sleep(wait_time)
 
-    logger.error(
-        "OpenAI API call failed after %d attempts: %s",
-        max_retries,
-        str(last_exception),
-    )
-    raise last_exception
+    if last_exception:
+        raise last_exception
+    raise RuntimeError(f"OpenAI API call failed after {max_retries} attempts.")
+
 
 
 async def transform_news_to_todai_format(raw_article: dict, category: str):
     """
-    Uses OpenAI to rewrite a raw news article into the TodAI format.
+    Uses OpenAI to rewrite a raw news article into the TodAI format matching frontend types in index.ts.
     """
+    title = raw_article.get("title", "")
+    description = raw_article.get("description", "")
+    source_name = raw_article.get("source", {}).get("name", "TechCrunch")
+
     prompt = f"""
     You are a professional AI news editor for the app 'TodAI'. 
-    Rewrite the following raw news article into a structured, editorial format.
+    Rewrite the following raw news article into a structured, editorial format matching the app's exact JSON schema.
     
-    Raw Article Title: {raw_article['title']}
-    Raw Article Description: {raw_article['description']}
+    Raw Article Title: {title}
+    Raw Article Description: {description}
+    Source Publisher: {source_name}
+    Target Category Context: {category}
     
-    Return a JSON object with:
-    1. 'headline': A catchy title.
-    2. 'summary': A 2-sentence intro.
-    3. 'tag': A specific tag (e.g., 'Generative AI', 'Robotics').
-    4. 'content_blocks': An array of objects. Blocks should include:
-       - 'paragraph' type
-       - 'takeaways' type (3 key points)
-       - 'quote' type (if relevant)
+    Return a JSON object with EXACTLY the following keys:
+    1. 'headline': Catchy, engaging title string.
+    2. 'title': Same as headline string.
+    3. 'summary': Clear 2-sentence summary string.
+    4. 'category': Pick the best matching category string from ['Generative AI', 'AI Tools', 'Research', 'Business', 'Science', 'General AI'].
+    5. 'tag': Specific short tag string (e.g. 'Generative AI', 'AI Tools', 'Research', 'Business', 'Science', 'Robotics', 'Finance', 'Strategy').
+    6. 'read_time_minutes': Estimated reading time integer (e.g. 3 or 4).
+    7. 'key_takeaways': An array of 3 bullet point strings summarizing the key insights.
+    8. 'quote': An object with '{{"text": "Key quote from article", "author": "{source_name}"}}'.
+    9. 'sections': An array of section objects, each with '{{"title": "Section Title", "content": "Section paragraph content..."}}'.
+    10. 'content_blocks': An array of block objects representing the article body:
+        - {{"type": "paragraph", "text": "Detailed paragraph text..."}}
+        - {{"type": "takeaway", "items": ["Key takeaway 1", "Key takeaway 2", "Key takeaway 3"]}}
+        - {{"type": "quote", "text": "Memorable quote...", "author": "{source_name}"}}
+        - {{"type": "section", "title": "Section Title", "content": "Detailed section text..."}}
     """
 
     return await _call_openai_with_retry(prompt)
+
+
 
 async def generate_lesson_and_quiz(news_headline: str, interest: str, level: str):
     """

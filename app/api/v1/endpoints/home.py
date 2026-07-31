@@ -69,37 +69,98 @@ async def get_home_dashboard(
     )
     user_with_profile = user_res.scalars().first()
 
+    # Ensure live news articles exist in DB (auto-generate via NewsAPI & OpenAI if empty or count < 10)
+    count_res = await db.execute(select(func.count(NewsArticle.id)))
+    if (count_res.scalar() or 0) < 10:
+        from app.services.news_service import fetch_and_generate_live_news_for_user
+        user_interests = user_with_profile.profile.interests if (user_with_profile and user_with_profile.profile and user_with_profile.profile.interests) else ["Generative AI", "AI Tools", "Technology"]
+        await fetch_and_generate_live_news_for_user(db, user_interests)
+
+
     query = select(NewsArticle).order_by(desc(NewsArticle.published_at))
 
     # Apply Filtering Logic per Tab
     if category_tab == "For You":
         interests = user_with_profile.profile.interests if (user_with_profile and user_with_profile.profile and user_with_profile.profile.interests) else []
         if interests:
-            query = query.filter(
-                or_(
-                    NewsArticle.category.in_(interests),
-                    NewsArticle.tag.in_(interests)
-                )
-            )
+            filter_conditions = []
+            for interest in interests:
+                filter_conditions.append(NewsArticle.category.icontains(interest))
+                filter_conditions.append(NewsArticle.tag.icontains(interest))
+            query = query.filter(or_(*filter_conditions))
     elif category_tab == "Trending":
-        query = query.limit(10)
+        query = query.limit(20)
+    elif category_tab in ["Tools", "AI Tools"]:
+        query = query.filter(
+            or_(
+                NewsArticle.category.icontains("Tools"),
+                NewsArticle.tag.icontains("Tools"),
+                NewsArticle.category.icontains("Productivity"),
+                NewsArticle.tag.icontains("Productivity"),
+                NewsArticle.category.icontains("App"),
+                NewsArticle.tag.icontains("App"),
+                NewsArticle.category.icontains("Software"),
+                NewsArticle.tag.icontains("Software"),
+                NewsArticle.category.icontains("Hardware"),
+                NewsArticle.tag.icontains("Hardware")
+            )
+        )
+    elif category_tab in ["Research", "Science"]:
+        query = query.filter(
+            or_(
+                NewsArticle.category.icontains("Research"),
+                NewsArticle.tag.icontains("Research"),
+                NewsArticle.category.icontains("Science"),
+                NewsArticle.tag.icontains("Science"),
+                NewsArticle.category.icontains("Health"),
+                NewsArticle.tag.icontains("Health"),
+                NewsArticle.category.icontains("Bio"),
+                NewsArticle.tag.icontains("Bio")
+            )
+        )
+    elif category_tab in ["Business", "Business & Leadership"]:
+        query = query.filter(
+            or_(
+                NewsArticle.category.icontains("Business"),
+                NewsArticle.tag.icontains("Business"),
+                NewsArticle.category.icontains("Finance"),
+                NewsArticle.tag.icontains("Finance"),
+                NewsArticle.category.icontains("Strategy"),
+                NewsArticle.tag.icontains("Strategy"),
+                NewsArticle.category.icontains("Leadership"),
+                NewsArticle.tag.icontains("Leadership"),
+                NewsArticle.category.icontains("Policy"),
+                NewsArticle.tag.icontains("Policy"),
+                NewsArticle.category.icontains("Consulting"),
+                NewsArticle.tag.icontains("Consulting"),
+                NewsArticle.category.icontains("International"),
+                NewsArticle.tag.icontains("International")
+            )
+        )
     else:
         query = query.filter(
             or_(
-                NewsArticle.category == category_tab,
-                NewsArticle.tag == category_tab,
-                NewsArticle.category.contains(category_tab),
-                NewsArticle.tag.contains(category_tab)
+                NewsArticle.category.icontains(category_tab),
+                NewsArticle.tag.icontains(category_tab)
             )
         )
+
 
     news_result = await db.execute(query)
     articles = news_result.scalars().all()
 
-    # Fallback: If tab filter yields 0 articles, return latest articles so feed is never empty
-    if not articles:
-        fallback_res = await db.execute(select(NewsArticle).order_by(desc(NewsArticle.published_at)))
-        articles = fallback_res.scalars().all()
+    # Fallback: If tab filter yields fewer than 10 articles, return top 20 latest articles so feed is never empty or thin
+    if not articles or len(articles) < 10:
+        fallback_res = await db.execute(select(NewsArticle).order_by(desc(NewsArticle.published_at)).limit(20))
+        fallback_articles = fallback_res.scalars().all()
+        seen_ids = {a.id for a in articles}
+        combined_articles = list(articles)
+        for fa in fallback_articles:
+            if fa.id not in seen_ids:
+                combined_articles.append(fa)
+                seen_ids.add(fa.id)
+        articles = combined_articles[:20]
+
 
     # 4. CHECK BOOKMARKS (Optimized: single query for bookmark IDs)
     bookmark_res = await db.execute(
@@ -110,28 +171,45 @@ async def get_home_dashboard(
     )
     bookmarked_ids = set(bookmark_res.scalars().all())
 
-    # 5. FORMAT FINAL NEWS LIST (map to frontend DTO shape)
+    # 5. FORMAT FINAL NEWS LIST (map to frontend DTO shape with 100% field coverage)
     formatted_news = []
     seen_headlines = set()
     for art in articles:
         if art.headline and art.headline in seen_headlines:
             continue
         seen_headlines.add(art.headline)
-        published_time = get_time_ago_string(art.published_at) if art.published_at else "Just now"
+        published_time_val = get_time_ago_string(art.published_at) if art.published_at else "Just now"
         date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
+        publisher_val = art.publisher or ""
+        original_url_val = art.original_url or ""
+        image_url_val = art.image_url or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+        read_time_val = art.read_time_minutes or 3
+        read_time_str = f"{read_time_val} min read"
+        is_bookmarked_val = art.id in bookmarked_ids
+        category_val = art.category or art.tag or "Generative AI"
+        tag_val = art.tag or art.category or "Generative AI"
+
         formatted_news.append({
             "id": str(art.id),
             "title": art.headline or "",
+            "headline": art.headline or "",
             "summary": art.summary or "",
-            "category": art.tag or "Generative AI",
-            "readTime": f"{art.read_time_minutes or 3} min read",
-            "publishedTime": published_time,
+            "category": category_val,
+            "tag": tag_val,
+            "readTime": read_time_str,
+            "read_time_minutes": read_time_val,
+            "publishedTime": published_time_val,
+            "time_ago": published_time_val,
             "date": date_str,
-            "publisher": art.publisher or "TechCrunch",
+            "publisher": publisher_val,
             "publishedDate": date_str,
-            "originalUrl": art.original_url or None,
-            "imageUrl": art.image_url or None,
-            "isBookmarked": art.id in bookmarked_ids
+            "published_date": date_str,
+            "originalUrl": original_url_val,
+            "original_url": original_url_val,
+            "imageUrl": image_url_val,
+            "image_url": image_url_val,
+            "isBookmarked": is_bookmarked_val,
+            "is_bookmarked": is_bookmarked_val
         })
 
     # 5.5 Count unread notifications dynamically
@@ -184,23 +262,42 @@ async def get_all_news(
         if art.headline and art.headline in seen_headlines:
             continue
         seen_headlines.add(art.headline)
+        published_time_val = get_time_ago_string(art.published_at) if art.published_at else "Just now"
         date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
+        publisher_val = art.publisher or "TechCrunch"
+        original_url_val = art.original_url or "https://techcrunch.com"
+        image_url_val = art.image_url or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+        read_time_val = art.read_time_minutes or 3
+        read_time_str = f"{read_time_val} min read"
+        is_bookmarked_val = art.id in bookmarked_ids
+        category_val = art.category or art.tag or "Generative AI"
+        tag_val = art.tag or art.category or "Generative AI"
+
         response_data.append({
             "id": str(art.id),
             "title": art.headline or "",
+            "headline": art.headline or "",
             "summary": art.summary or "",
-            "category": art.tag or "Generative AI",
-            "readTime": f"{art.read_time_minutes or 3} min read",
-            "publishedTime": get_time_ago_string(art.published_at),
+            "category": category_val,
+            "tag": tag_val,
+            "readTime": read_time_str,
+            "read_time_minutes": read_time_val,
+            "publishedTime": published_time_val,
+            "time_ago": published_time_val,
             "date": date_str,
-            "publisher": art.publisher or "TechCrunch",
+            "publisher": publisher_val,
             "publishedDate": date_str,
-            "originalUrl": art.original_url or None,
-            "imageUrl": art.image_url or None,
-            "isBookmarked": art.id in bookmarked_ids
+            "published_date": date_str,
+            "originalUrl": original_url_val,
+            "original_url": original_url_val,
+            "imageUrl": image_url_val,
+            "image_url": image_url_val,
+            "isBookmarked": is_bookmarked_val,
+            "is_bookmarked": is_bookmarked_val
         })
 
     return response_data
+
 
 # 2. GET NEWS DETAIL (Screen 2)
 @router.get("/news/{news_id}", response_model=NewsDetailResponse)
@@ -228,7 +325,8 @@ async def get_news_detail(
     # 3. Fetch related articles & check user bookmark status for them
     related_res = await db.execute(
         select(NewsArticle)
-        .filter(NewsArticle.category == article.category, NewsArticle.id != news_id)
+        .filter(NewsArticle.id != news_id)
+        .order_by(desc(NewsArticle.published_at))
         .limit(2)
     )
     related_articles = related_res.scalars().all()
@@ -253,56 +351,84 @@ async def get_news_detail(
             "id": str(rel.id),
             "title": rel.headline or "",
             "summary": rel.summary or "",
-            "category": rel.tag or "Generative AI",
+            "category": rel.tag or rel.category or "Generative AI",
             "readTime": f"{rel.read_time_minutes or 3} min read",
             "publishedTime": get_time_ago_string(rel.published_at),
             "date": rel_date,
             "publisher": rel.publisher or "TechCrunch",
             "publishedDate": rel_date,
-            "originalUrl": rel.original_url or None,
+            "originalUrl": rel.original_url or "https://techcrunch.com",
             "imageUrl": rel.image_url or None,
             "isBookmarked": rel.id in user_bookmarked_ids
         })
 
     # 4. Return Final Data (map to frontend article shape)
     date_str = article.published_at.strftime("%d %b %Y") if article.published_at else datetime.utcnow().strftime("%d %b %Y")
-    content = article.content_blocks if article.content_blocks else None
-    key_takeaways = None
-    sections = None
+    content = article.content_blocks if article.content_blocks else []
+    
+    key_takeaways = []
+    sections = []
     quote = None
-    if isinstance(article.content_blocks, list):
-        key_takeaways = []
-        sections = []
-        for b in article.content_blocks:
-            if isinstance(b, dict) and b.get('type') in ('takeaway','takeaways','key_takeaways'):
-                items = b.get('items') or b.get('takeaways') or []
-                key_takeaways.extend(items if isinstance(items, list) else [items])
-            elif isinstance(b, dict) and b.get('type') in ('section','sections'):
-                sections.append(b)
-            elif isinstance(b, dict) and b.get('type') == 'quote':
-                quote = b.get('text')
+    if isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict):
+                b_type = b.get('type')
+                if b_type in ('takeaway','takeaways','key_takeaways'):
+                    items = b.get('items') or b.get('takeaways') or b.get('points') or []
+                    if isinstance(items, list):
+                        key_takeaways.extend(items)
+                    elif isinstance(items, str):
+                        key_takeaways.append(items)
+                elif b_type in ('section','sections'):
+                    sec_title = b.get('title', '')
+                    sec_content = b.get('content', b.get('text', ''))
+                    if sec_title:
+                        sections.append({"title": sec_title, "content": sec_content})
+                elif b_type == 'quote':
+                    q_text = b.get('text') or b.get('quote', '')
+                    q_author = b.get('author') or article.publisher or "TechCrunch"
+                    if q_text:
+                        quote = {"text": q_text, "author": q_author}
+
+    publisher_val = article.publisher or "TechCrunch"
+    original_url_val = article.original_url or "https://techcrunch.com"
+    image_url_val = article.image_url or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+    published_time_val = get_time_ago_string(article.published_at) if article.published_at else "Just now"
 
     article_obj = {
         "id": str(article.id),
         "title": article.headline or "",
-        "summary": article.summary or (content[0].get('text') if content and isinstance(content, list) and isinstance(content[0], dict) and content[0].get('text') else ""),
-        "category": article.tag or "Generative AI",
+        "headline": article.headline or "",
+        "summary": article.summary or "",
+        "category": article.tag or article.category or "Generative AI",
+        "tag": article.tag or article.category or "Generative AI",
         "readTime": f"{article.read_time_minutes or 3} min read",
-        "publishedTime": get_time_ago_string(article.published_at),
+        "read_time_minutes": article.read_time_minutes or 3,
+        "publishedTime": published_time_val,
+        "time_ago": published_time_val,
         "date": date_str,
-        "publisher": getattr(article, 'publisher', 'TechCrunch'),
+        "publisher": publisher_val,
         "publishedDate": date_str,
-        "originalUrl": getattr(article, 'original_url', None),
-        "imageUrl": article.image_url or None,
+        "published_date": date_str,
+        "originalUrl": original_url_val,
+        "original_url": original_url_val,
+        "imageUrl": image_url_val,
+        "image_url": image_url_val,
         "isBookmarked": is_bookmarked,
+        "is_bookmarked": is_bookmarked,
+        "content_blocks": content,
         "content": content,
         "keyTakeaways": key_takeaways if key_takeaways else None,
+        "key_takeaways": key_takeaways if key_takeaways else None,
         "quote": quote,
         "sections": sections if sections else None,
-        "relatedNews": related_cards
+        "relatedNews": related_cards,
+        "related_news": related_cards
     }
 
     return article_obj
+
+
 
 # 3. MARK NEWS AS READ (Updates the Daily Pulse Progress!)
 @router.post("/news/{news_id}/read", response_model=ReadStatusResponse)
