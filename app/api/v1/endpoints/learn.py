@@ -41,6 +41,35 @@ def _normalize_topic_label(topic: Optional[str]) -> str:
     return cleaned.title() if cleaned.islower() else cleaned
 
 
+def _extract_lesson_cards_data(lesson: Optional[Any]) -> List[Any]:
+    """Safely read lesson cards from the ORM model without crashing on expired attributes."""
+    if not lesson:
+        return []
+
+    try:
+        cards_data = getattr(lesson, "cards_data", None)
+    except Exception:
+        cards_data = None
+
+    if cards_data is None:
+        try:
+            cards_data = lesson.__dict__.get("cards_data")
+        except Exception:
+            cards_data = None
+
+    if not cards_data:
+        return []
+    if isinstance(cards_data, list):
+        return cards_data
+    if isinstance(cards_data, str):
+        try:
+            parsed = json.loads(cards_data)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
+
+
 def _build_lesson_cards_from_article(article: "NewsArticle") -> List[Dict[str, Any]]:
     """
     Build rich lesson cards from a real NewsArticle's content_blocks, summary, and headline.
@@ -184,7 +213,8 @@ async def _ensure_news_learning_path(
         lessons = lessons_res.scalars().all()
         if lessons:
             first_lesson = lessons[0]
-            actual_total_cards = len(first_lesson.cards_data) if first_lesson.cards_data else 1
+            first_lesson_cards = _extract_lesson_cards_data(first_lesson)
+            actual_total_cards = len(first_lesson_cards) if first_lesson_cards else 1
             actual_total_lessons = len(lessons)
             actual_total_minutes = sum(l.estimated_minutes or 5 for l in lessons)
             return {
@@ -513,7 +543,8 @@ async def get_learn_dashboard(
             if ctx["lesson_id"] not in completed_lesson_ids:
                 lesson_res = await db.execute(select(Lesson).filter(Lesson.id == ctx["lesson_id"]))
                 lesson = lesson_res.scalars().first()
-                total_cards = len(lesson.cards_data) if (lesson and lesson.cards_data) else 1
+                cards_data = _extract_lesson_cards_data(lesson)
+                total_cards = len(cards_data) if cards_data else 1
                 prog_for_les = next((pr for pr in all_progress if pr.lesson_id == ctx["lesson_id"]), None)
                 cards_done = prog_for_les.cards_completed if prog_for_les else 0
                 pct = int((cards_done / max(1, total_cards)) * 100)
@@ -537,7 +568,8 @@ async def get_learn_dashboard(
                 if les.id not in completed_lesson_ids:
                     prog_for_les = next((pr for pr in all_progress if pr.lesson_id == les.id), None)
                     cards_done = prog_for_les.cards_completed if prog_for_les else 0
-                    total_cards = len(les.cards_data) if les.cards_data else 1
+                    cards_data = _extract_lesson_cards_data(les)
+                    total_cards = len(cards_data) if cards_data else 1
                     pct = int((cards_done / max(1, total_cards)) * 100)
                     continue_learning = {
                         "path_id": p.id,
@@ -615,7 +647,8 @@ async def get_learn_dashboard(
     for cand in ordered_candidates:
         lesson_res = await db.execute(select(Lesson).filter(Lesson.id == cand["lesson_id"]))
         lesson = lesson_res.scalars().first()
-        total_cards = len(lesson.cards_data) if (lesson and lesson.cards_data) else 1
+        cards_data = _extract_lesson_cards_data(lesson)
+        total_cards = len(cards_data) if cards_data else 1
         duration_mins = lesson.estimated_minutes if lesson else max(3, math.ceil(total_cards * 1.2))
         recommended_lessons.append({
             **cand,
@@ -658,7 +691,8 @@ async def get_path_details(
 
     for idx, lesson in enumerate(sorted_lessons):
         prog = progress_map.get(lesson.id)
-        total_c = len(lesson.cards_data) if lesson.cards_data else 1
+        cards_data = _extract_lesson_cards_data(lesson)
+        total_c = len(cards_data) if cards_data else 1
         cards_done = 0
 
         if prog and prog.status == "completed":
