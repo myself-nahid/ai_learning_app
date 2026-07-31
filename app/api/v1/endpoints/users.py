@@ -211,7 +211,7 @@ async def update_preferences(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Updates the user's primary interests or AI level.
+    Updates the user's primary interests or AI level and fetches live news matching selected interests.
     Matches the 'Preferences' button in the UI.
     """
     # Use the service layer
@@ -223,9 +223,13 @@ async def update_preferences(
         primary_goal=data.primary_goal,
     )
     
+    if data.interests and len(data.interests) > 0:
+        from app.services.news_service import fetch_and_generate_live_news_for_user
+        await fetch_and_generate_live_news_for_user(db, data.interests)
+
     return {
         "status": "success",
-        "message": "Preferences updated successfully. Your feed will reflect these changes tomorrow."
+        "message": "Preferences updated successfully. Your feed will reflect these changes.",
     }
 
 @router.get("/legal/terms", response_model=LegalPageResponse)

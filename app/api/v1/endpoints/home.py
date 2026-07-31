@@ -347,20 +347,39 @@ async def get_news_detail(
             continue
         seen_related.add(rel.headline)
         rel_date = rel.published_at.strftime("%d %b %Y") if rel.published_at else datetime.utcnow().strftime("%d %b %Y")
+        rel_pub_time = get_time_ago_string(rel.published_at) if rel.published_at else "Just now"
+        rel_publisher = rel.publisher or "TechCrunch"
+        rel_orig_url = rel.original_url or "https://techcrunch.com"
+        rel_img_url = rel.image_url or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+        rel_rt_min = rel.read_time_minutes or 3
+        rel_rt_str = f"{rel_rt_min} min read"
+        rel_is_bm = rel.id in user_bookmarked_ids
+        rel_cat = rel.category or rel.tag or "Generative AI"
+        rel_tag = rel.tag or rel.category or "Generative AI"
+
         related_cards.append({
             "id": str(rel.id),
             "title": rel.headline or "",
+            "headline": rel.headline or "",
             "summary": rel.summary or "",
-            "category": rel.tag or rel.category or "Generative AI",
-            "readTime": f"{rel.read_time_minutes or 3} min read",
-            "publishedTime": get_time_ago_string(rel.published_at),
+            "category": rel_cat,
+            "tag": rel_tag,
+            "readTime": rel_rt_str,
+            "read_time_minutes": rel_rt_min,
+            "publishedTime": rel_pub_time,
+            "time_ago": rel_pub_time,
             "date": rel_date,
-            "publisher": rel.publisher or "TechCrunch",
+            "publisher": rel_publisher,
             "publishedDate": rel_date,
-            "originalUrl": rel.original_url or "https://techcrunch.com",
-            "imageUrl": rel.image_url or None,
-            "isBookmarked": rel.id in user_bookmarked_ids
+            "published_date": rel_date,
+            "originalUrl": rel_orig_url,
+            "original_url": rel_orig_url,
+            "imageUrl": rel_img_url,
+            "image_url": rel_img_url,
+            "isBookmarked": rel_is_bm,
+            "is_bookmarked": rel_is_bm
         })
+
 
     # 4. Return Final Data (map to frontend article shape)
     date_str = article.published_at.strftime("%d %b %Y") if article.published_at else datetime.utcnow().strftime("%d %b %Y")
