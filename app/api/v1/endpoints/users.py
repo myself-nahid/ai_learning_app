@@ -1,11 +1,12 @@
+from datetime import datetime
 from typing import List
 from pydantic import BaseModel
 
-
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func
+from sqlalchemy import func, desc
 from sqlalchemy.future import select
+
 
 from sqlalchemy.orm import selectinload
 from app.core.config import settings 
@@ -171,37 +172,62 @@ async def get_saved_items(
     Fetches all news articles that the user has bookmarked.
     Matches the 'Saved' button in the UI.
     """
-    # Query articles joined with interactions where is_bookmarked is True
     query = (
         select(NewsArticle)
-        .join(UserNewsInteraction)
+        .join(UserNewsInteraction, UserNewsInteraction.news_id == NewsArticle.id)
         .filter(
             UserNewsInteraction.user_id == current_user.id,
             UserNewsInteraction.is_bookmarked == True
         )
-        .order_by(NewsArticle.published_at.desc())
+        .order_by(desc(NewsArticle.published_at))
     )
     
     result = await db.execute(query)
     articles = result.scalars().all()
 
-    # Map to schema (including time_ago calculation)
-    from app.api.v1.endpoints.home import get_time_ago_string # reuse helper
+    from app.api.v1.endpoints.home import get_time_ago_string
     
     saved_list = []
+    seen_ids = set()
     for art in articles:
+        if art.id in seen_ids:
+            continue
+        seen_ids.add(art.id)
+        date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
+        pub_time = get_time_ago_string(art.published_at) if art.published_at else "Just now"
+        publisher_val = art.publisher or "TechCrunch"
+        original_url_val = art.original_url or "https://techcrunch.com"
+        image_url_val = art.image_url or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+        read_time_val = art.read_time_minutes or 3
+        read_time_str = f"{read_time_val} min read"
+        category_val = art.category or art.tag or "Generative AI"
+        tag_val = art.tag or art.category or "Generative AI"
+
         saved_list.append({
-            "id": art.id,
-            "image_url": art.image_url or "",
-            "tag": art.tag,
-            "headline": art.headline,
-            "summary": art.summary,
-            "read_time_minutes": art.read_time_minutes,
-            "time_ago": get_time_ago_string(art.published_at),
-            "is_bookmarked": True # They are all bookmarked in this list
+            "id": str(art.id),
+            "title": art.headline or "",
+            "headline": art.headline or "",
+            "summary": art.summary or "",
+            "category": category_val,
+            "tag": tag_val,
+            "readTime": read_time_str,
+            "read_time_minutes": read_time_val,
+            "publishedTime": pub_time,
+            "time_ago": pub_time,
+            "date": date_str,
+            "publisher": publisher_val,
+            "publishedDate": date_str,
+            "published_date": date_str,
+            "originalUrl": original_url_val,
+            "original_url": original_url_val,
+            "imageUrl": image_url_val,
+            "image_url": image_url_val,
+            "isBookmarked": True,
+            "is_bookmarked": True
         })
     
     return saved_list
+
 
 # PREFERENCES ENDPOINT
 @router.patch("/preferences", response_model=StatusMessageResponse)

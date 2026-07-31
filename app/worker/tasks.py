@@ -143,9 +143,11 @@ async def _send_user_daily_reminder(user):
         title="Your Daily Pulse is Ready! ⚡",
         body="Tap to complete today's 5-minute AI briefing and keep your streak alive.",
         data_payload={
+            "briefing": True,
             "screen": "daily_briefing_sequence",
             "action": "start",
         },
+
     )
     return None
 
