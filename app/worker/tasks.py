@@ -55,42 +55,43 @@ async def process_real_daily_pulse_for_all_users():
                 if not raw_articles or len(raw_articles) < 1:
                     continue
                 
-                # 3. Transform the raw news
-                ai_news_data = await transform_news_to_todai_format(
-                    raw_articles[0], 
-                    daily_focus
-                )
-                
-                # 4. Generate Lesson & Quiz
-                study_material = await generate_lesson_and_quiz(
-                    news_headline=ai_news_data['headline'],
-                    interest=daily_focus,
-                    level=user.profile.ai_level
-                )
+                # 3. Transform the first 3 relevant articles and save them as today's news batch
+                article_batch = []
+                study_material = None
+                for source_article in raw_articles[:3]:
+                    ai_news_data = await transform_news_to_todai_format(source_article, daily_focus)
+                    new_article = NewsArticle(
+                        headline=ai_news_data['headline'],
+                        summary=ai_news_data['summary'],
+                        tag=ai_news_data['tag'],
+                        category=daily_focus,
+                        content_blocks=ai_news_data['content_blocks'],
+                        image_url=source_article.get('urlToImage'),
+                        publisher=source_article.get('source', {}).get('name'),
+                        original_url=source_article.get('url'),
+                        published_at=datetime.utcnow()
+                    )
+                    db.add(new_article)
+                    await db.flush()
+                    article_batch.append(new_article)
 
-                # 5. Save to database using the chosen focus category
-                source_article = raw_articles[0]
-                new_article = NewsArticle(
-                    headline=ai_news_data['headline'],
-                    summary=ai_news_data['summary'],
-                    tag=ai_news_data['tag'],
-                    category=daily_focus,
-                    content_blocks=ai_news_data['content_blocks'],
-                    image_url=source_article.get('urlToImage'),
-                    publisher=source_article.get('source', {}).get('name'),
-                    original_url=source_article.get('url'),
-                    published_at=datetime.utcnow()
-                )
-                db.add(new_article)
-                await db.flush() # Secure the article ID
+                    if study_material is None:
+                        study_material = await generate_lesson_and_quiz(
+                            news_headline=ai_news_data['headline'],
+                            interest=daily_focus,
+                            level=user.profile.ai_level
+                        )
 
-                # 6. Create the Daily Session (The "Daily Pulse")
+                if not article_batch:
+                    continue
+
+                # 4. Create the Daily Session (The "Daily Pulse")
                 # This record is what the Home Dashboard reads to show progress (0/5 activities)
                 new_session = DailySession(
                     user_id=user.id,
                     date=datetime.utcnow(),
-                    assigned_news_ids=[new_article.id], # In prod, you'd add more IDs here
-                    lesson_data=study_material, # Contains: title, content, takeaway, and quiz questions
+                    assigned_news_ids=[article.id for article in article_batch],
+                    lesson_data=study_material,
                     news_completed=0,
                     lesson_completed=False,
                     quiz_completed=False
