@@ -210,7 +210,7 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
     if target_count >= 2:
         p2 = paragraphs[1] if len(paragraphs) > 1 else (paragraphs[0] if paragraphs else summary)
         l2_cards: List[Dict[str, Any]] = [
-            {"cardType": "intro", "title": f"Deep Dive: {topic_label} Insights", "bodyText": p2, "imageUrl": image_url},
+            {"cardType": "intro", "title": f"Deep Dive: {short_headline}", "bodyText": p2, "imageUrl": image_url},
             {
                 "cardType": "comparison",
                 "title": "Traditional Approach vs. AI-Powered Workflow",
@@ -249,7 +249,7 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
         for i, c in enumerate(l2_cards, start=1): c["id"] = f"card_{i}"
         lessons.append({
             "sequence_order": 2,
-            "title": f"2. Deep Dive & Analysis: {topic_label}",
+            "title": f"2. Deep Dive: {short_headline}",
             "description": f"Analyze the broader context, expert perspectives, and technical implications of {topic_label}.",
             "cards_data": l2_cards,
             "estimated_minutes": max(3, math.ceil(len(l2_cards) * 1.2)),
@@ -258,7 +258,7 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
     if target_count >= 3:
         t_takeaway = takeaways[0] if takeaways else f"key advancements in {topic_label}"
         l3_cards: List[Dict[str, Any]] = [
-            {"cardType": "intro", "title": f"Strategy: Future Impact of {topic_label}", "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial.", "imageUrl": image_url},
+            {"cardType": "intro", "title": f"Strategy: Future Impact of {short_headline}", "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial.", "imageUrl": image_url},
         ]
         if quote_text:
             l3_cards.append({"cardType": "intro", "title": "Expert Perspective", "bodyText": f'"{quote_text}"'})
@@ -291,7 +291,7 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
         for i, c in enumerate(l3_cards, start=1): c["id"] = f"card_{i}"
         lessons.append({
             "sequence_order": 3,
-            "title": f"3. Strategic Execution: {topic_label}",
+            "title": f"3. Strategic Execution: {short_headline}",
             "description": f"Master practical steps, future outlook, and strategic execution for {topic_label}.",
             "cards_data": l3_cards,
             "estimated_minutes": max(3, math.ceil(len(l3_cards) * 1.2)),
@@ -300,39 +300,39 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
     if target_count >= 4:
         p3 = paragraphs[2] if len(paragraphs) > 2 else summary
         l4_cards: List[Dict[str, Any]] = [
-            {"cardType": "intro", "title": f"Practical Application: {topic_label}", "bodyText": p3, "imageUrl": image_url},
+            {"cardType": "intro", "title": f"Practical Application: {short_headline}", "bodyText": p3, "imageUrl": image_url},
             {"cardType": "list", "title": "Implementation Best Practices", "listItems": takeaways[4:8] if len(takeaways) > 4 else ["Define clear KPIs", "Ensure data privacy", "Train team members", "Establish fallback protocols"]},
             {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"How can teams best implement {topic_label} practically?", correct_text="Define clear KPIs, train team members, and ensure data privacy", distractors=["Avoid setting measurable goals", "Never train staff on new workflows", "Remove all security protocols"], seed=f"{art_id}_l4")}
         ]
         for i, c in enumerate(l4_cards, start=1): c["id"] = f"card_{i}"
-        lessons.append({"sequence_order": 4, "title": f"4. Practical Application: {topic_label}", "description": f"Learn practical workflows and integration tactics for {topic_label}.", "cards_data": l4_cards, "estimated_minutes": max(3, math.ceil(len(l4_cards) * 1.2))})
+        lessons.append({"sequence_order": 4, "title": f"4. Practical Application: {short_headline}", "description": f"Learn practical workflows and integration tactics for {topic_label}.", "cards_data": l4_cards, "estimated_minutes": max(3, math.ceil(len(l4_cards) * 1.2))})
 
     if target_count >= 5:
         l5_cards: List[Dict[str, Any]] = [
-            {"cardType": "intro", "title": f"Governance & Risk Management: {topic_label}", "bodyText": f"Managing risks and maintaining compliance is vital when leveraging {topic_label}.", "imageUrl": image_url},
+            {"cardType": "intro", "title": f"Governance & Risk Management: {short_headline}", "bodyText": f"Managing risks and maintaining compliance is vital when leveraging {topic_label}.", "imageUrl": image_url},
             {"cardType": "steps", "title": "Risk Mitigation Protocol", "stepItems": ["Identify potential compliance gaps", "Enforce encryption and access control", "Conduct regular security audits", "Maintain transparent reporting"]},
             {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"What is essential for risk governance in {topic_label}?", correct_text="Conducting regular security audits and enforcing access control", distractors=["Disabling user authentication", "Hiding audit reports from leadership", "Storing credentials in public forums"], seed=f"{art_id}_l5")}
         ]
         for i, c in enumerate(l5_cards, start=1): c["id"] = f"card_{i}"
-        lessons.append({"sequence_order": 5, "title": f"5. Governance & Risk: {topic_label}", "description": f"Explore governance frameworks and risk management for {topic_label}.", "cards_data": l5_cards, "estimated_minutes": max(3, math.ceil(len(l5_cards) * 1.2))})
+        lessons.append({"sequence_order": 5, "title": f"5. Governance & Risk: {short_headline}", "description": f"Explore governance frameworks and risk management for {topic_label}.", "cards_data": l5_cards, "estimated_minutes": max(3, math.ceil(len(l5_cards) * 1.2))})
 
     if target_count >= 6:
         l6_cards: List[Dict[str, Any]] = [
-            {"cardType": "intro", "title": f"Real-World Impact & Case Study: {topic_label}", "bodyText": f"Examine how industry leaders are applying {topic_label} to achieve measurable results.", "imageUrl": image_url},
+            {"cardType": "intro", "title": f"Real-World Impact & Case Study: {short_headline}", "bodyText": f"Examine how industry leaders are applying {topic_label} to achieve measurable results.", "imageUrl": image_url},
             {"cardType": "list", "title": "Key Outcomes Observed", "listItems": ["30% efficiency increase in routine tasks", "Accelerated time-to-market for new features", "Improved decision confidence among stakeholders", "Enhanced scalability across teams"]},
             {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"What real-world impact is commonly seen with {topic_label}?", correct_text="Increased operational efficiency and accelerated decision making", distractors=["Immediate operational slowdowns", "Total loss of project visibility", "Exponential increase in manual errors"], seed=f"{art_id}_l6")}
         ]
         for i, c in enumerate(l6_cards, start=1): c["id"] = f"card_{i}"
-        lessons.append({"sequence_order": 6, "title": f"6. Real-World Impact: {topic_label}", "description": f"Analyze case studies and real-world outcomes of {topic_label}.", "cards_data": l6_cards, "estimated_minutes": max(3, math.ceil(len(l6_cards) * 1.2))})
+        lessons.append({"sequence_order": 6, "title": f"6. Real-World Impact: {short_headline}", "description": f"Analyze case studies and real-world outcomes of {topic_label}.", "cards_data": l6_cards, "estimated_minutes": max(3, math.ceil(len(l6_cards) * 1.2))})
 
     if target_count >= 7:
         l7_cards: List[Dict[str, Any]] = [
-            {"cardType": "intro", "title": f"Strategic Masterclass & Future Outlook: {topic_label}", "bodyText": f"Looking ahead, {topic_label} is poised to redefine long-term strategic advantage.", "imageUrl": image_url},
+            {"cardType": "intro", "title": f"Strategic Masterclass & Future Outlook: {short_headline}", "bodyText": f"Looking ahead, {topic_label} is poised to redefine long-term strategic advantage.", "imageUrl": image_url},
             {"cardType": "steps", "title": "Mastery Execution Plan", "stepItems": ["Integrate predictive analytics into core product", "Establish cross-functional innovation pods", "Continuously refine custom domain models", "Lead industry benchmark standards"]},
             {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"What marks the pinnacle of strategic mastery in {topic_label}?", correct_text="Leading industry benchmark standards through continuous innovation", distractors=["Abandoning all innovation efforts", "Stagnating product capabilities indefinitely", "Ignoring customer feedback and market metrics"], seed=f"{art_id}_l7")}
         ]
         for i, c in enumerate(l7_cards, start=1): c["id"] = f"card_{i}"
-        lessons.append({"sequence_order": 7, "title": f"7. Strategic Masterclass: {topic_label}", "description": f"Master executive leadership and long-term vision for {topic_label}.", "cards_data": l7_cards, "estimated_minutes": max(3, math.ceil(len(l7_cards) * 1.2))})
+        lessons.append({"sequence_order": 7, "title": f"7. Strategic Masterclass: {short_headline}", "description": f"Master executive leadership and long-term vision for {topic_label}.", "cards_data": l7_cards, "estimated_minutes": max(3, math.ceil(len(l7_cards) * 1.2))})
 
     return lessons
 
@@ -383,15 +383,16 @@ async def _ensure_news_learning_path(
                 "description": description,
             }
 
-    # ── Create new LearningPath with 3 lessons ───────────────────────────────
+    # ── Create new LearningPath with dynamic lessons ──────────────────────────────
     multi_lessons_data = _build_multi_lessons_from_article(article)
     total_lessons = len(multi_lessons_data)
     total_minutes = sum(d["estimated_minutes"] for d in multi_lessons_data)
+    path_level = _determine_article_level(article, 1)
 
     new_path = LearningPath(
         title=display_title,
         description=description,
-        level="Beginner",
+        level=path_level,
         total_lessons=total_lessons,
         total_minutes=total_minutes,
         image_url=image_url,
@@ -592,6 +593,81 @@ def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> Li
 
     return normalized_cards
 
+
+def _determine_article_level(article: "NewsArticle", sequence_order: int = 1) -> str:
+    """
+    Dynamically determine difficulty level (Beginner, Intermediate, Advanced) based on
+    article topic complexity, text length, and lesson depth.
+    """
+    headline = (article.headline or article.title or "").lower()
+    category = (article.category or article.tag or "").lower()
+    text = f"{headline} {category}"
+    art_id = article.id or 1
+    art_hash = art_id % 3
+
+    if sequence_order == 1:
+        if any(k in text for k in ["worm", "cyber", "vulnerability", "quantum", "semiconductor"]):
+            return "Intermediate"
+        elif art_hash == 1:
+            return "Intermediate"
+        elif art_hash == 2:
+            return "Advanced"
+        return "Beginner"
+    elif sequence_order <= 3:
+        if art_hash == 2:
+            return "Advanced"
+        return "Intermediate"
+    else:
+        return "Advanced"
+
+
+def _clean_category_name(title: str) -> str:
+    """Extract clean category name before colon, e.g. 'Consulting & Strategy: New AI...' -> 'Consulting & Strategy'"""
+    if not title:
+        return "General"
+    if ":" in title:
+        return title.split(":")[0].strip()
+    return title.strip()
+
+
+def _build_continue_learning_payload(
+    path: LearningPath,
+    lesson: Lesson,
+    cards_done: int,
+    all_progress: List[UserLessonProgress]
+) -> Dict[str, Any]:
+    cards_data = _extract_lesson_cards_data(lesson)
+    total_cards = len(cards_data) if cards_data else 1
+    cards_done = max(0, min(cards_done, total_cards))
+    les_pct = int((cards_done / max(1, total_cards)) * 100)
+
+    actual_total_lessons = len(path.lessons) if path.lessons else 1
+    path_lesson_ids = {l.id for l in path.lessons} if path.lessons else set()
+    path_completed_count = sum(
+        1 for pr in all_progress
+        if pr.status == "completed" and (pr.path_id == path.id or pr.lesson_id in path_lesson_ids)
+    )
+    path_pct = int((path_completed_count / max(1, actual_total_lessons)) * 100)
+
+    display_pct = les_pct if cards_done > 0 else (path_pct if path_completed_count > 0 else les_pct)
+
+    est_mins = lesson.estimated_minutes or max(1, math.ceil(total_cards * 1.0))
+    remaining_cards = max(0, total_cards - cards_done)
+    mins_remaining = max(0 if cards_done >= total_cards else 1, math.ceil(remaining_cards * (est_mins / max(1, total_cards))))
+
+    return {
+        "path_id": path.id,
+        "lesson_id": lesson.id,
+        "title": lesson.title,
+        "path_title": path.title,
+        "completed_cards": cards_done,
+        "total_cards": total_cards,
+        "progress_percentage": display_pct,
+        "minutes_remaining": mins_remaining,
+        "image_url": path.image_url,
+    }
+
+
 # 1. GET LEARN DASHBOARD (Screen 1)
 @router.get("/dashboard", response_model=LearnDashboardResponse)
 async def get_learn_dashboard(
@@ -664,12 +740,15 @@ async def get_learn_dashboard(
     completed_lesson_ids = {prog.lesson_id for prog in all_progress if prog.status == "completed"}
 
     # ── Continue Learning ────────────────────────────────────────────────────
-    # Priority 1: Most recently accessed in_progress lesson (with status != completed)
+    # Priority 1: Most recently accessed in-progress / uncompleted lesson
+    in_prog_candidates = [
+        p for p in all_progress
+        if p.status != "completed" and p.lesson_id not in completed_lesson_ids
+    ]
     active_progress = None
-    for prog in sorted(all_progress, key=lambda x: x.last_accessed or datetime.min, reverse=True):
-        if prog.status == "in_progress" and prog.lesson_id not in completed_lesson_ids:
-            active_progress = prog
-            break
+    if in_prog_candidates:
+        in_prog_candidates.sort(key=lambda x: x.last_accessed or datetime.min, reverse=True)
+        active_progress = in_prog_candidates[0]
 
     continue_learning = None
     if active_progress:
@@ -678,23 +757,12 @@ async def get_learn_dashboard(
         target_path_id = active_progress.path_id or (lesson.path_id if lesson else None)
         path = None
         if target_path_id:
-            path_res = await db.execute(select(LearningPath).filter(LearningPath.id == target_path_id))
+            path_res = await db.execute(select(LearningPath).options(selectinload(LearningPath.lessons)).filter(LearningPath.id == target_path_id))
             path = path_res.scalars().first()
 
         if lesson and path:
-            total_cards = len(lesson.cards_data) if lesson.cards_data else 1
             cards_done = active_progress.cards_completed or 0
-            progress_pct = int((cards_done / max(1, total_cards)) * 100)
-            continue_learning = {
-                "path_id": path.id,
-                "lesson_id": lesson.id,
-                "title": lesson.title,
-                "path_title": path.title,
-                "completed_cards": cards_done,
-                "total_cards": total_cards,
-                "progress_percentage": progress_pct,
-                "image_url": path.image_url,
-            }
+            continue_learning = _build_continue_learning_payload(path, lesson, cards_done, all_progress)
 
     # Priority 2: First news-derived path's lesson if uncompleted
     if not continue_learning and news_path_contexts:
@@ -702,22 +770,14 @@ async def get_learn_dashboard(
             if ctx["lesson_id"] not in completed_lesson_ids:
                 lesson_res = await db.execute(select(Lesson).filter(Lesson.id == ctx["lesson_id"]))
                 lesson = lesson_res.scalars().first()
-                cards_data = _extract_lesson_cards_data(lesson)
-                total_cards = len(cards_data) if cards_data else 1
-                prog_for_les = next((pr for pr in all_progress if pr.lesson_id == ctx["lesson_id"]), None)
-                cards_done = prog_for_les.cards_completed if prog_for_les else 0
-                pct = int((cards_done / max(1, total_cards)) * 100)
-                continue_learning = {
-                    "path_id": ctx["path_id"],
-                    "lesson_id": ctx["lesson_id"],
-                    "title": ctx["title"],
-                    "path_title": ctx["path_title"],
-                    "completed_cards": cards_done,
-                    "total_cards": total_cards,
-                    "progress_percentage": pct,
-                    "image_url": ctx["image_url"],
-                }
-                break
+                path_res = await db.execute(select(LearningPath).options(selectinload(LearningPath.lessons)).filter(LearningPath.id == ctx["path_id"]))
+                path = path_res.scalars().first()
+
+                if lesson and path:
+                    prog_for_les = next((pr for pr in all_progress if pr.lesson_id == ctx["lesson_id"]), None)
+                    cards_done = prog_for_les.cards_completed if prog_for_les else 0
+                    continue_learning = _build_continue_learning_payload(path, lesson, cards_done, all_progress)
+                    break
 
     # Priority 3: First available uncompleted lesson from any existing path
     if not continue_learning:
@@ -727,19 +787,7 @@ async def get_learn_dashboard(
                 if les.id not in completed_lesson_ids:
                     prog_for_les = next((pr for pr in all_progress if pr.lesson_id == les.id), None)
                     cards_done = prog_for_les.cards_completed if prog_for_les else 0
-                    cards_data = _extract_lesson_cards_data(les)
-                    total_cards = len(cards_data) if cards_data else 1
-                    pct = int((cards_done / max(1, total_cards)) * 100)
-                    continue_learning = {
-                        "path_id": p.id,
-                        "lesson_id": les.id,
-                        "title": les.title,
-                        "path_title": p.title,
-                        "completed_cards": cards_done,
-                        "total_cards": total_cards,
-                        "progress_percentage": pct,
-                        "image_url": p.image_url,
-                    }
+                    continue_learning = _build_continue_learning_payload(p, les, cards_done, all_progress)
                     break
             if continue_learning:
                 break
@@ -780,7 +828,7 @@ async def get_learn_dashboard(
             "title": ctx["title"],
             "description": ctx["description"],
             "level": ctx.get("level", "Beginner"),
-            "category": ctx["path_title"],
+            "category": _clean_category_name(ctx.get("path_title") or ctx.get("title") or ""),
             "image_url": ctx["image_url"],
         })
 
@@ -797,7 +845,7 @@ async def get_learn_dashboard(
                     "title": les.title,
                     "description": les.description or p.description,
                     "level": p.level or "Beginner",
-                    "category": p.title,
+                    "category": _clean_category_name(p.title),
                     "image_url": p.image_url,
                 })
 

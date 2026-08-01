@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 
@@ -16,6 +17,8 @@ class ContinueLearningSchema(BaseModel):
     path_title: str
     completed_cards: int
     total_cards: int
+    progress_percentage: Optional[int] = 0
+    minutes_remaining: Optional[int] = 5
     image_url: Optional[str] = None
 
 
