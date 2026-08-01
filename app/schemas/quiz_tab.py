@@ -45,6 +45,7 @@ class QuizQuestionSchema(BaseModel):
     id: int
     question_text: str
     options: Dict[str, str]
+    correct_option_key: Optional[str] = None  # Sent to frontend so client-side answer validation works
 
 class QuizStartResponse(BaseModel):
     attempt_id: int

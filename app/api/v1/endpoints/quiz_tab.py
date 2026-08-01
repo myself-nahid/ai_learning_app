@@ -308,6 +308,28 @@ async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
 
 
 
+def _get_user_quiz_set_status(all_attempts: list, quiz_set_id: int):
+    set_attempts = [a for a in all_attempts if a.quiz_set_id == quiz_set_id]
+    if not set_attempts:
+        return "not_started", None, None
+
+    completed_attempts = [a for a in set_attempts if a.status == "completed"]
+    if completed_attempts:
+        best_completed = sorted(
+            completed_attempts,
+            key=lambda x: (x.score or 0, x.completed_at or datetime.min),
+            reverse=True,
+        )[0]
+        return "completed", best_completed.score, best_completed.id
+
+    latest_att = sorted(
+        set_attempts,
+        key=lambda x: x.started_at or datetime.min,
+        reverse=True,
+    )[0]
+    return latest_att.status, latest_att.score, latest_att.id
+
+
 # 1. GET QUIZ DASHBOARD (Screens 1 & 2)
 @router.get("/dashboard", response_model=QuizDashboardResponse)
 async def get_quiz_dashboard(
@@ -318,13 +340,13 @@ async def get_quiz_dashboard(
     # 1. Fetch User Stats (Accuracy, Completed Count)
     attempts_res = await db.execute(select(QuizAttempt).filter(QuizAttempt.user_id == current_user.id))
     all_attempts = attempts_res.scalars().all()
-    
+
     completed_attempts = [a for a in all_attempts if a.status == "completed"]
     total_correct = sum(a.score or 0 for a in completed_attempts)
     total_answered = sum(len(a.user_answers or {}) for a in completed_attempts)
-    
+
     accuracy = int((total_correct / total_answered) * 100) if total_answered > 0 else 0
-    
+
     # Fetch day streak dynamically from WeeklyActivity
     from app.db.models import WeeklyActivity
     from datetime import timedelta
@@ -385,7 +407,6 @@ async def get_quiz_dashboard(
         q_set = set_res.scalars().first()
 
         if q_set:
-            # Get actual question count from DB
             q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
             actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
             answered_count = len(latest.user_answers or {})
@@ -401,17 +422,19 @@ async def get_quiz_dashboard(
                 estimated_minutes=q_set.estimated_minutes,
             )
 
-    # Priority 2: Use first news-derived quiz set (real ID from DB)
+    # Priority 2: Use first uncompleted news-derived quiz set
     if not continue_quiz and news_quiz_contexts:
-        ctx = news_quiz_contexts[0]
+        uncompleted_ctxs = [ctx for ctx in news_quiz_contexts if ctx["quiz_set_id"] not in completed_set_ids]
+        target_ctx = uncompleted_ctxs[0] if uncompleted_ctxs else news_quiz_contexts[0]
         continue_quiz = ContinueQuizSchema(
-            card_type="recommended",
-            quiz_set_id=ctx["quiz_set_id"],
-            category=ctx["category"],
-            quiz_title=ctx["title"],
-            total_questions=ctx["total_questions"],
-            progress_percentage=0,
-            estimated_minutes=ctx["estimated_minutes"],
+            card_type="recommended" if uncompleted_ctxs else "all_completed",
+            quiz_set_id=target_ctx["quiz_set_id"],
+            category=target_ctx["category"],
+            quiz_title=target_ctx["title"],
+            total_questions=target_ctx["total_questions"],
+            progress_percentage=0 if uncompleted_ctxs else 100,
+            estimated_minutes=target_ctx["estimated_minutes"],
+            total_completed_sets=len(completed_set_ids),
         )
 
     # Priority 3: First uncompleted set from DB
@@ -441,29 +464,13 @@ async def get_quiz_dashboard(
                 progress_percentage=100,
             )
 
-    # ── Build categories dict ─────────────────────────────────────────────────
+    # ── Build categories dict strictly for selected tab ────────────────────────
     categories_dict: dict = {}
 
-    # "For You" tab: show all news-derived quiz sets with real IDs
-    if news_quiz_contexts:
+    if category_tab == "For You" or category_tab == "Trending":
         for_you_cards = []
         for ctx in news_quiz_contexts:
-            attempt_for_ctx = next(
-                (a for a in all_attempts if a.quiz_set_id == ctx["quiz_set_id"]), None
-            )
-            if attempt_for_ctx and attempt_for_ctx.status == "completed":
-                status = "completed"
-                score = attempt_for_ctx.score
-                last_attempt_id = attempt_for_ctx.id
-            elif attempt_for_ctx:
-                status = attempt_for_ctx.status
-                score = attempt_for_ctx.score
-                last_attempt_id = attempt_for_ctx.id
-            else:
-                status = "not_started"
-                score = None
-                last_attempt_id = None
-
+            st, sc, att_id = _get_user_quiz_set_status(all_attempts, ctx["quiz_set_id"])
             for_you_cards.append(QuizSetCardSchema(
                 quiz_set_id=ctx["quiz_set_id"],
                 title=ctx["title"],
@@ -473,52 +480,32 @@ async def get_quiz_dashboard(
                 total_questions=ctx["total_questions"],
                 estimated_minutes=ctx["estimated_minutes"],
                 xp_reward=ctx["xp_reward"],
-                status=status,
-                score=score,
-                last_attempt_id=last_attempt_id,
+                status=st,
+                score=sc,
+                last_attempt_id=att_id,
             ))
         categories_dict["For You"] = for_you_cards
+    else:
+        cat_cards = []
+        for q_set in quiz_sets:
+            st, sc, att_id = _get_user_quiz_set_status(all_attempts, q_set.id)
+            q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
+            actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
 
-    # All other sets grouped by their category
-    for q_set in quiz_sets:
-        attempts_for_set = [a for a in all_attempts if a.quiz_set_id == q_set.id]
-        completed_att = next((a for a in attempts_for_set if a.status == "completed"), None)
-        latest_att = sorted(attempts_for_set, key=lambda x: x.started_at or datetime.min, reverse=True)[0] if attempts_for_set else None
-
-        if completed_att:
-            status = "completed"
-            score = completed_att.score
-            last_attempt_id = completed_att.id
-        elif latest_att:
-            status = latest_att.status
-            score = latest_att.score
-            last_attempt_id = latest_att.id
-        else:
-            status = "not_started"
-            score = None
-            last_attempt_id = None
-
-        # Get actual question count
-        q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
-        actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
-
-        card = QuizSetCardSchema(
-            quiz_set_id=q_set.id,
-            title=q_set.title,
-            description=q_set.description,
-            category=q_set.category,
-            level=q_set.level,
-            total_questions=actual_total,
-            estimated_minutes=q_set.estimated_minutes,
-            xp_reward=q_set.xp_reward,
-            status=status,
-            score=score,
-            last_attempt_id=last_attempt_id,
-        )
-
-        if q_set.category not in categories_dict:
-            categories_dict[q_set.category] = []
-        categories_dict[q_set.category].append(card)
+            cat_cards.append(QuizSetCardSchema(
+                quiz_set_id=q_set.id,
+                title=q_set.title,
+                description=q_set.description,
+                category=q_set.category,
+                level=q_set.level,
+                total_questions=actual_total,
+                estimated_minutes=q_set.estimated_minutes,
+                xp_reward=q_set.xp_reward,
+                status=st,
+                score=sc,
+                last_attempt_id=att_id,
+            ))
+        categories_dict[category_tab] = cat_cards
 
     # Build full category list for tab bar
     distinct_cat_res = await db.execute(select(distinct(QuizSet.category)))
@@ -539,6 +526,43 @@ async def get_quiz_dashboard(
         categories=categories_dict,
         all_categories=all_categories_list,
     )
+
+
+# 1b. GET QUESTIONS (Read-only — used for review mode, no attempt created)
+@router.get("/sets/{quiz_set_id}/questions")
+async def get_quiz_questions(
+    quiz_set_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Returns questions with correct_option_key for a quiz set without creating an attempt.
+    Used by the review mode in the frontend runner."""
+    qset_res = await db.execute(
+        select(QuizSet)
+        .options(selectinload(QuizSet.questions))
+        .filter(QuizSet.id == quiz_set_id)
+    )
+    q_set = qset_res.scalars().first()
+    if not q_set:
+        raise HTTPException(status_code=404, detail="Quiz Set not found")
+
+    questions = [
+        {
+            "id": q.id,
+            "question_text": q.question_text,
+            "options": q.options,
+            "correct_option_key": q.correct_option_key,
+        }
+        for q in q_set.questions
+    ]
+    return {
+        "quiz_set_id": q_set.id,
+        "quiz_title": q_set.title,
+        "total_questions": len(questions),
+        "questions": questions,
+    }
+
+
 
 # 2. START OR RETAKE A QUIZ (Screen 3)
 @router.post("/start/{quiz_set_id}", response_model=QuizStartResponse)
@@ -562,7 +586,12 @@ async def start_quiz(
 
     quiz_title = q_set.title
     formatted_questions = [
-        {"id": q.id, "question_text": q.question_text, "options": q.options} 
+        {
+            "id": q.id,
+            "question_text": q.question_text,
+            "options": q.options,
+            "correct_option_key": q.correct_option_key,
+        }
         for q in q_set.questions
     ]
 
