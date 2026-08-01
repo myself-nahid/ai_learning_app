@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -24,6 +25,7 @@ class QuizSetCardSchema(BaseModel):
     quiz_set_id: int
     title: str
     description: str
+    category: Optional[str] = None
     level: str
     total_questions: int
     estimated_minutes: int

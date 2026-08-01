@@ -23,115 +23,265 @@ router = APIRouter(prefix="/quiz-tab", tags=["Dedicated Quiz Section"])
 
 
 
-async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
-    """
-    Find or create a real QuizSet + QuizQuestions from a NewsArticle.
-    Always returns a real quiz_set_id > 0.
-    """
-    from app.db.models import QuizSet as QS, QuizQuestion as QQ
+import random
 
+
+def _shorten_quiz_str(s: str, max_len: int = 80) -> str:
+    s = (s or "").strip()
+    return s[:max_len] + ("..." if len(s) > max_len else "")
+
+
+def _clean_quiz_category(article) -> str:
+    raw = f"{article.category or ''} {article.tag or ''} {article.headline or ''}".lower()
+
+    if any(k in raw for k in ["worm", "hack", "cyber", "security", "malicious", "vulnerability", "breach", "exploit", "copilot worm"]):
+        return "Cybersecurity"
+    if any(k in raw for k in ["robot", "autonomous", "drone", "humanoid", "boston dynamics"]):
+        return "Robotics"
+    if any(k in raw for k in ["llm", "gpt", "generative", "diffusion", "ai model", "openai", "claude", "gemini"]):
+        return "Generative AI"
+    if any(k in raw for k in ["tool", "app", "software", "productivity", "hardware", "platform", "device"]):
+        return "Tools"
+    if any(k in raw for k in ["research", "science", "paper", "study", "health", "bio", "medical", "clinical"]):
+        return "Research"
+    if any(k in raw for k in ["invest", "finance", "market", "stock", "fund", "equity", "rare earth", "pentagon", "capital"]):
+        return "Finance"
+    if any(k in raw for k in ["ceo", "cmo", "cfo", "appoint", "leadership", "executive", "hire", "leader"]):
+        return "Leadership"
+    if any(k in raw for k in ["strategy", "consulting", "deal", "acquisition", "merge", "corporate"]):
+        return "Strategy"
+    if any(k in raw for k in ["business", "revenue", "enterprise", "industry"]):
+        return "Business"
+    if "sport" in raw:
+        return "Sports"
+    if any(k in raw for k in ["politic", "government", "policy", "law"]):
+        return "Politics"
+
+    cat = (article.category or article.tag or "Generative AI").strip()
+    if ":" in cat:
+        cat = cat.split(":")[0].strip()
+    return cat if cat else "Generative AI"
+
+
+def _determine_quiz_difficulty(article) -> str:
+    full_text = f"{article.headline or ''} {article.summary or ''}".lower()
+    blocks = article.content_blocks or []
+    for b in blocks:
+        if isinstance(b, dict):
+            b_text = str(b.get("content") or b.get("text") or "")
+            full_text += " " + b_text.lower()
+
+    word_count = len(full_text.split())
+    tech_terms = [
+        "worm", "vulnerability", "malicious", "exploit", "quantum",
+        "infrastructure", "rare earth", "pentagon", "algorithm",
+        "architecture", "hyperscale", "deployment"
+    ]
+    tech_count = sum(1 for term in tech_terms if term in full_text)
+
+    if word_count > 320 or tech_count >= 3:
+        return "Advanced"
+    elif word_count > 160 or tech_count >= 1:
+        return "Intermediate"
+    else:
+        return "Beginner"
+
+
+def _build_dynamic_questions_for_article(article) -> list:
+    """
+    Generates 3 to 6 unique, article-specific questions with shuffled choices (A, B, C, D).
+    """
     headline = (article.headline or "").strip() or "this news story"
-    topic = (article.tag or article.category or headline or "").strip()
-    quiz_title = f"Quick Quiz: {headline[:55]}{'...' if len(headline) > 55 else ''}"
-    description = f"Test your understanding of {headline} and why it matters."
+    clean_cat = _clean_quiz_category(article)
+    publisher = (article.publisher or "Industry Analysts").strip()
+    summary = (article.summary or "").strip()
+    art_id = getattr(article, "id", 1) or 1
 
-    # ── Look up existing quiz set with this title ───────────────────────────
-    existing_res = await db.execute(select(QS).filter(QS.title == quiz_title))
-    existing_qs = existing_res.scalars().first()
-    if existing_qs:
-        q_count_res = await db.execute(select(QQ).filter(QQ.quiz_set_id == existing_qs.id))
-        actual_q_count = len(q_count_res.scalars().all())
-        return {
-            "quiz_set_id": existing_qs.id,
-            "title": existing_qs.title,
-            "description": existing_qs.description or description,
-            "category": existing_qs.category or topic,
-            "level": existing_qs.level or "Beginner",
-            "total_questions": actual_q_count,
-            "estimated_minutes": existing_qs.estimated_minutes or 3,
-            "xp_reward": existing_qs.xp_reward or 10,
-        }
-
-    # ── Build dynamic questions from article content ────────────────────────
     content_blocks = article.content_blocks or []
+    paragraphs: list = []
     takeaways: list = []
-    paragraph_text: str = ""
+    quotes: list = []
+
     for block in content_blocks:
         if not isinstance(block, dict):
             continue
         btype = block.get("type", "")
         bcontent = block.get("content") or block.get("text") or ""
-        if btype == "paragraph" and bcontent and not paragraph_text:
-            paragraph_text = str(bcontent).strip()
-        elif btype == "takeaways" and isinstance(bcontent, list):
+        if btype == "paragraph" and bcontent:
+            paragraphs.append(str(bcontent).strip())
+        elif btype in ["takeaways", "bullets"] and isinstance(bcontent, list):
             takeaways.extend([str(i).strip() for i in bcontent if i])
+        elif btype == "quote" and bcontent:
+            quotes.append(str(bcontent).strip())
 
-    questions_data = [
-        {
-            "question_text": f"What is the main idea behind: {headline[:60]}?",
-            "options": {
-                "A": f"{topic} introduces a new development or tool",
-                "B": "It has no practical impact on everyday work",
-                "C": "It only affects a very small niche group",
-                "D": "It is purely for entertainment purposes",
-            },
-            "correct_option_key": "A",
-        },
-        {
-            "question_text": f"Why should professionals pay attention to {topic}?",
-            "options": {
-                "A": "It may improve efficiency or understanding",
-                "B": "It creates no value for most people",
-                "C": "It is only relevant to scientists",
-                "D": "It is too complex to be useful",
-            },
-            "correct_option_key": "A",
-        },
+    questions_raw = []
+
+    # ── Question 1: Headline & Core Summary ──────────────────────────────────
+    q1_text = f"According to {publisher}, what is the main takeaway of '{_shorten_quiz_str(headline, 50)}'?"
+    correct_1 = _shorten_quiz_str(summary if summary else f"{headline} presents key developments in {clean_cat}.", 85)
+    distractors_1 = [
+        f"All operations across {clean_cat} have been permanently shut down",
+        f"A complete repeal of all technology standards in {clean_cat} was enacted",
+        f"The development was proved to have zero impact on industry practices"
     ]
+    questions_raw.append((q1_text, correct_1, distractors_1))
 
-    # Add a takeaway-based question if we have data
+    # ── Question 2: Key Impact / Practical Relevance ──────────────────────────
+    q2_text = f"What core impact or insight does this development hold for {clean_cat}?"
     if takeaways:
-        first_takeaway = takeaways[0][:80]
-        questions_data.append({
-            "question_text": f"Which of the following is a key takeaway from this topic?",
-            "options": {
-                "A": first_takeaway,
-                "B": "This topic has no real-world applications",
-                "C": "Only large corporations benefit from this",
-                "D": "This replaces all human judgment entirely",
-            },
-            "correct_option_key": "A",
+        correct_2 = _shorten_quiz_str(takeaways[0], 85)
+    elif len(paragraphs) > 1:
+        correct_2 = _shorten_quiz_str(paragraphs[1], 85)
+    else:
+        correct_2 = _shorten_quiz_str(f"It introduces structural improvements and strategic value for {clean_cat}.", 85)
+
+    distractors_2 = [
+        f"It mandates a complete return to legacy paper-based workflows",
+        f"It halts further investment in {clean_cat} indefinitely",
+        f"It only affects isolated research laboratories with no commercial use"
+    ]
+    questions_raw.append((q2_text, correct_2, distractors_2))
+
+    # ── Question 3: Primary Detail / Takeaway 1 ──────────────────────────────
+    if takeaways or paragraphs:
+        detail1 = takeaways[0] if takeaways else paragraphs[0]
+        q3_text = f"Which detail is specifically highlighted regarding {clean_cat}?"
+        correct_3 = _shorten_quiz_str(detail1, 85)
+        distractors_3 = [
+            f"No verified empirical data could be gathered during reporting",
+            f"The initiative failed to meet any established performance metrics",
+            f"Industry leaders unanimously agreed to pause activities for 5 years"
+        ]
+        questions_raw.append((q3_text, correct_3, distractors_3))
+
+    # ── Question 4: Secondary Detail / Takeaway 2 ──────────────────────────────
+    if len(takeaways) > 1 or len(paragraphs) > 1:
+        detail2 = takeaways[1] if len(takeaways) > 1 else paragraphs[1]
+        q4_text = f"What secondary key finding is described in the article?"
+        correct_4 = _shorten_quiz_str(detail2, 85)
+        distractors_4 = [
+            f"Stakeholders confirmed zero progress was made",
+            f"The deployment resulted in immediate catastrophic failure",
+            f"All participants opted to revert to previous generation tools"
+        ]
+        questions_raw.append((q4_text, correct_4, distractors_4))
+
+    # ── Question 5: Quote / Expert Perspective ────────────────────────────────
+    if quotes or len(paragraphs) > 2:
+        q5_text = f"What perspective or quote is emphasized regarding {clean_cat}?"
+        q5_source = quotes[0] if quotes else paragraphs[-1]
+        correct_5 = _shorten_quiz_str(q5_source, 85)
+        distractors_5 = [
+            "All experts recommend discontinuing adoption immediately",
+            "The final consensus was that traditional methods remain vastly superior",
+            "The project was abandoned due to unexpected cost overruns"
+        ]
+        questions_raw.append((q5_text, correct_5, distractors_5))
+
+    labels = ["A", "B", "C", "D"]
+    final_questions = []
+
+    for item in questions_raw:
+        q_text, corr_ans, dists = item[0], item[1], item[2]
+        opts = [corr_ans] + dists[:3]
+        random.shuffle(opts)
+
+        options_dict = {}
+        correct_key = "A"
+        for i, opt_text in enumerate(opts):
+            lbl = labels[i]
+            options_dict[lbl] = opt_text
+            if opt_text == corr_ans:
+                correct_key = lbl
+
+        final_questions.append({
+            "question_text": q_text,
+            "options": options_dict,
+            "correct_option_key": correct_key,
         })
 
-    # Add a paragraph-comprehension question if we have a paragraph
-    if paragraph_text:
-        questions_data.append({
-            "question_text": f"According to the article, what best describes the situation around {topic}?",
-            "options": {
-                "A": paragraph_text[:80] + ("..." if len(paragraph_text) > 80 else ""),
-                "B": f"{topic} is being completely abandoned",
-                "C": "No significant changes are happening",
-                "D": "Only negative effects are being reported",
-            },
-            "correct_option_key": "A",
-        })
+    return final_questions
 
-    estimated_minutes = max(2, len(questions_data))
 
-    # ── Create QuizSet ──────────────────────────────────────────────────────
+async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
+    """
+    Find or create a real QuizSet + QuizQuestions from a NewsArticle.
+    Builds dynamic, article-specific questions with dynamic difficulty, estimated minutes, and XP rewards.
+    """
+    from app.db.models import QuizSet as QS, QuizQuestion as QQ
+
+    headline = (article.headline or "").strip() or "this news story"
+    clean_cat = _clean_quiz_category(article)
+    difficulty_level = _determine_quiz_difficulty(article)
+    quiz_title = f"Quick Quiz: {headline[:55]}{'...' if len(headline) > 55 else ''}"
+    description = f"Test your understanding of {headline} and why it matters."
+
+    questions_data = _build_dynamic_questions_for_article(article)
+    total_q = len(questions_data)
+    estimated_minutes = max(3, int(total_q * 1.5))
+
+    if difficulty_level == "Advanced":
+        xp_reward = 20 + (total_q * 5)
+    elif difficulty_level == "Intermediate":
+        xp_reward = 15 + (total_q * 3)
+    else:
+        xp_reward = 10 + (total_q * 2)
+
+    # ── Look up existing quiz set with this title ───────────────────────────
+    existing_res = await db.execute(select(QS).filter(QS.title == quiz_title))
+    existing_qs = existing_res.scalars().first()
+
+    if existing_qs:
+        # Upgrade existing QuizSet attributes to match dynamic level, category, minutes, and XP
+        existing_qs.category = clean_cat
+        existing_qs.level = difficulty_level
+        existing_qs.estimated_minutes = estimated_minutes
+        existing_qs.xp_reward = xp_reward
+
+        q_res = await db.execute(select(QQ).filter(QQ.quiz_set_id == existing_qs.id))
+        existing_questions = q_res.scalars().all()
+
+        # Upgrade static legacy questions if questions were fewer or static
+        if len(existing_questions) != total_q or all(q.correct_option_key == "A" for q in existing_questions):
+            for old_q in existing_questions:
+                await db.delete(old_q)
+            await db.flush()
+
+            for qd in questions_data:
+                q = QQ(
+                    quiz_set_id=existing_qs.id,
+                    question_text=qd["question_text"],
+                    options=qd["options"],
+                    correct_option_key=qd["correct_option_key"],
+                )
+                db.add(q)
+            existing_qs.total_questions = total_q
+
+        await db.commit()
+
+        return {
+            "quiz_set_id": existing_qs.id,
+            "title": existing_qs.title,
+            "description": existing_qs.description or description,
+            "category": clean_cat,
+            "level": difficulty_level,
+            "total_questions": total_q,
+            "estimated_minutes": estimated_minutes,
+            "xp_reward": xp_reward,
+        }
+
+    # ── Create new QuizSet with dynamic parameters ───────────────────────────
     new_qs = QS(
-        category=topic,
+        category=clean_cat,
         title=quiz_title,
         description=description,
-        level="Beginner",
-        total_questions=len(questions_data),
+        level=difficulty_level,
+        total_questions=total_q,
         estimated_minutes=estimated_minutes,
-        xp_reward=10,
+        xp_reward=xp_reward,
     )
     db.add(new_qs)
     await db.flush()
-
-    # Capture ID before commit (commit expires ORM attributes)
     saved_qs_id = new_qs.id
 
     for qd in questions_data:
@@ -149,11 +299,11 @@ async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
         "quiz_set_id": saved_qs_id,
         "title": quiz_title,
         "description": description,
-        "category": topic,
-        "level": "Beginner",
-        "total_questions": len(questions_data),
+        "category": clean_cat,
+        "level": difficulty_level,
+        "total_questions": total_q,
         "estimated_minutes": estimated_minutes,
-        "xp_reward": 10,
+        "xp_reward": xp_reward,
     }
 
 
@@ -203,14 +353,16 @@ async def get_quiz_dashboard(
         day_streak=streak_days
     )
 
-    news_res = await db.execute(select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(3))
+    news_res = await db.execute(select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(15))
     latest_news = news_res.scalars().all()
 
     # ── Ensure every news article has a real QuizSet + Questions ────────────
     news_quiz_contexts = []
+    seen_set_ids = set()
     for article in latest_news:
         ctx = await _ensure_news_quiz_set(db, article)
-        if ctx:
+        if ctx and ctx["quiz_set_id"] not in seen_set_ids:
+            seen_set_ids.add(ctx["quiz_set_id"])
             news_quiz_contexts.append(ctx)
 
     # Fetch Quiz Sets and group by Category (now includes auto-created sets)
@@ -316,6 +468,7 @@ async def get_quiz_dashboard(
                 quiz_set_id=ctx["quiz_set_id"],
                 title=ctx["title"],
                 description=ctx["description"],
+                category=ctx["category"],
                 level=ctx["level"],
                 total_questions=ctx["total_questions"],
                 estimated_minutes=ctx["estimated_minutes"],
@@ -353,6 +506,7 @@ async def get_quiz_dashboard(
             quiz_set_id=q_set.id,
             title=q_set.title,
             description=q_set.description,
+            category=q_set.category,
             level=q_set.level,
             total_questions=actual_total,
             estimated_minutes=q_set.estimated_minutes,
@@ -513,6 +667,7 @@ async def submit_quiz(
         select(QuizAttempt).filter(
             QuizAttempt.user_id == current_user.id,
             QuizAttempt.quiz_set_id == attempt.quiz_set_id,
+            QuizAttempt.id != attempt.id,
             QuizAttempt.status == "in_progress"
         )
     )
