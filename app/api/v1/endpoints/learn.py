@@ -76,10 +76,9 @@ def _extract_lesson_cards_data(lesson: Optional[Any]) -> List[Any]:
 
 def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, Any]]:
     """
-    Build 3 structured lessons per NewsArticle, each containing EXACTLY 5 cards:
-    - Lesson 1: Introduction & Overview (5 cards)
-    - Lesson 2: Deep Dive & Technical Analysis (5 cards)
-    - Lesson 3: Strategic Execution & Future Impact (5 cards)
+    Build 3 structured lessons per NewsArticle, dynamically assembling cards
+    based on the news article's content_blocks (paragraphs, takeaways, quotes).
+    card counts dynamically adapt per news structure.
     """
     headline = (article.headline or article.title or "").strip()
     summary = (article.summary or "").strip()
@@ -107,170 +106,153 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
                 quote_text = str(bcontent).strip()
 
     short_headline = _shorten_title(headline, 50)
-    p1 = paragraphs[0] if len(paragraphs) > 0 else summary
-    p2 = paragraphs[1] if len(paragraphs) > 1 else (paragraphs[0] if paragraphs else summary)
 
-    # --- LESSON 1: Introduction & Overview (5 cards) ---
-    l1_cards = [
-        {
-            "id": "card_1",
-            "cardType": "intro",
-            "title": f"Overview: {short_headline}",
-            "bodyText": summary or f"Discover the key concepts behind {topic_label} and why it is transforming the industry.",
-            "imageUrl": image_url,
-        },
-        {
-            "id": "card_2",
+    # --- LESSON 1: Overview & Fundamentals (Dynamic card assembly) ---
+    l1_cards: List[Dict[str, Any]] = []
+    l1_cards.append({
+        "cardType": "intro",
+        "title": f"Overview: {short_headline}",
+        "bodyText": summary or f"Discover the key concepts behind {topic_label} and why it is transforming the industry.",
+        "imageUrl": image_url,
+    })
+    if paragraphs:
+        l1_cards.append({
             "cardType": "intro",
             "title": "Why This Matters",
-            "bodyText": p1,
-        },
-        {
-            "id": "card_3",
+            "bodyText": paragraphs[0],
+        })
+    if takeaways:
+        l1_cards.append({
             "cardType": "list",
             "title": f"Key Highlights: {topic_label}",
-            "listItems": takeaways[:4] if takeaways else [
-                f"{topic_label} introduces new workflow capabilities",
-                "Streamlines decision-making and operational speed",
-                "Enhances overall productivity across key departments"
+            "listItems": takeaways[:4],
+        })
+    l1_cards.append({
+        "cardType": "steps",
+        "title": "Getting Started Steps",
+        "stepItems": [
+            f"Understand the core premise: {short_headline}",
+            f"Review how {topic_label} impacts your domain",
+            "Identify potential integration points in your daily workflow",
+            "Share actionable insights with key team members"
+        ],
+    })
+    l1_cards.append({
+        "cardType": "quiz",
+        "title": "Check Your Understanding",
+        "quizData": {
+            "question": f"What is the primary topic of this lesson?",
+            "options": [
+                {"id": "A", "label": "A", "text": f"Recent developments in {topic_label}: {short_headline[:45]}"},
+                {"id": "B", "label": "B", "text": "Unrelated historical background information"},
+                {"id": "C", "label": "C", "text": "Basic computer hardware installation"},
             ],
+            "correctOptionId": "A",
         },
-        {
-            "id": "card_4",
-            "cardType": "steps",
-            "title": "Getting Started Steps",
-            "stepItems": [
-                f"Understand the core premise: {short_headline}",
-                f"Review how {topic_label} impacts your domain",
-                "Identify potential integration points in your daily workflow",
-                "Share actionable insights with key team members"
-            ],
-        },
-        {
-            "id": "card_5",
-            "cardType": "quiz",
-            "title": "Check Your Understanding",
-            "quizData": {
-                "question": f"What is the primary topic of this lesson?",
-                "options": [
-                    {"id": "A", "label": "A", "text": f"Recent developments in {topic_label}: {short_headline[:45]}"},
-                    {"id": "B", "label": "B", "text": "Unrelated historical background information"},
-                    {"id": "C", "label": "C", "text": "Basic computer hardware installation"},
-                ],
-                "correctOptionId": "A",
-            },
-        },
-    ]
+    })
+    for i, card in enumerate(l1_cards, start=1):
+        card["id"] = f"card_{i}"
 
-    # --- LESSON 2: Deep Dive & Technical Analysis (5 cards) ---
-    l2_cards = [
-        {
-            "id": "card_1",
-            "cardType": "intro",
-            "title": f"Deep Dive: {topic_label} Insights",
-            "bodyText": p2,
-            "imageUrl": image_url,
+    # --- LESSON 2: Deep Dive & Technical Analysis (Dynamic card assembly) ---
+    l2_cards: List[Dict[str, Any]] = []
+    p2 = paragraphs[1] if len(paragraphs) > 1 else (paragraphs[0] if paragraphs else summary)
+    l2_cards.append({
+        "cardType": "intro",
+        "title": f"Deep Dive: {topic_label} Insights",
+        "bodyText": p2,
+        "imageUrl": image_url,
+    })
+    l2_cards.append({
+        "cardType": "comparison",
+        "title": "Traditional Approach vs. AI-Powered Workflow",
+        "comparisonData": {
+            "traditionalTitle": "Traditional Approach",
+            "traditionalBullets": ["Manual execution and review", "Slower response to changes", "Fixed rules-based logic"],
+            "aiTitle": f"{topic_label} AI Advantage",
+            "aiBullets": ["Automated pattern recognition", "Real-time contextual adaptation", "Scalable decision support"]
         },
-        {
-            "id": "card_2",
-            "cardType": "comparison",
-            "title": "Traditional Approach vs. AI-Powered Workflow",
-            "comparisonData": {
-                "traditionalTitle": "Traditional Approach",
-                "traditionalBullets": ["Manual execution and review", "Slower response to changes", "Fixed rules-based logic"],
-                "aiTitle": f"{topic_label} AI Advantage",
-                "aiBullets": ["Automated pattern recognition", "Real-time contextual adaptation", "Scalable decision support"]
-            },
-        },
-        {
-            "id": "card_3",
+    })
+    if len(takeaways) > 4:
+        l2_cards.append({
             "cardType": "list",
-            "title": "Industry Takeaways",
-            "listItems": takeaways[4:8] if len(takeaways) > 4 else [
-                "Early adopters report significant efficiency gains",
-                "Reduces manual overhead and speeds up task execution",
-                "Sets a new benchmark for competitive advantage"
+            "title": "Industry Insights",
+            "listItems": takeaways[4:8],
+        })
+    l2_cards.append({
+        "cardType": "steps",
+        "title": "Analysis & Verification Steps",
+        "stepItems": [
+            "Gather baseline data before implementing change",
+            "Benchmark results against traditional methods",
+            "Refine prompt instructions and workflow rules",
+            "Evaluate accuracy and overall ROI"
+        ],
+    })
+    l2_cards.append({
+        "cardType": "quiz",
+        "title": "Check Your Understanding",
+        "quizData": {
+            "question": f"How does the {topic_label} solution compare to traditional methods?",
+            "options": [
+                {"id": "A", "label": "A", "text": "It automates pattern analysis and accelerates workflows"},
+                {"id": "B", "label": "B", "text": "It requires more manual work and is significantly slower"},
+                {"id": "C", "label": "C", "text": "It has no measurable difference from legacy methods"},
             ],
+            "correctOptionId": "A",
         },
-        {
-            "id": "card_4",
-            "cardType": "steps",
-            "title": "Analysis & Verification Steps",
-            "stepItems": [
-                "Gather baseline data before implementing change",
-                "Benchmark results against traditional methods",
-                "Refine prompt instructions and workflow rules",
-                "Evaluate accuracy and overall ROI"
-            ],
-        },
-        {
-            "id": "card_5",
-            "cardType": "quiz",
-            "title": "Check Your Understanding",
-            "quizData": {
-                "question": f"How does the {topic_label} solution compare to traditional methods?",
-                "options": [
-                    {"id": "A", "label": "A", "text": "It automates pattern analysis and accelerates workflows"},
-                    {"id": "B", "label": "B", "text": "It requires more manual work and is significantly slower"},
-                    {"id": "C", "label": "C", "text": "It has no measurable difference from legacy methods"},
-                ],
-                "correctOptionId": "A",
-            },
-        },
-    ]
+    })
+    for i, card in enumerate(l2_cards, start=1):
+        card["id"] = f"card_{i}"
 
-    # --- LESSON 3: Strategic Execution & Future Impact (5 cards) ---
-    l3_cards = [
-        {
-            "id": "card_1",
-            "cardType": "intro",
-            "title": f"Strategy: Future Impact of {topic_label}",
-            "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial for long-term growth and leadership.",
-            "imageUrl": image_url,
-        },
-        {
-            "id": "card_2",
+    # --- LESSON 3: Strategic Execution (Dynamic card assembly) ---
+    l3_cards: List[Dict[str, Any]] = []
+    l3_cards.append({
+        "cardType": "intro",
+        "title": f"Strategy: Future Impact of {topic_label}",
+        "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial for long-term growth and leadership.",
+        "imageUrl": image_url,
+    })
+    if quote_text:
+        l3_cards.append({
             "cardType": "intro",
             "title": "Expert Perspective",
-            "bodyText": f'"{quote_text}"' if quote_text else f'"{short_headline} represents a strategic inflection point for professionals looking to stay ahead."',
-        },
-        {
-            "id": "card_3",
-            "cardType": "list",
-            "title": "Strategic Principles",
-            "listItems": [
-                "Align AI adoption with core business objectives",
-                "Invest in continuous learning and skill upgrade",
-                "Maintain strong human oversight and quality control",
-                "Monitor regulatory and compliance updates"
+            "bodyText": f'"{quote_text}"',
+        })
+    l3_cards.append({
+        "cardType": "list",
+        "title": "Strategic Principles",
+        "listItems": [
+            "Align AI adoption with core business objectives",
+            "Invest in continuous learning and skill upgrade",
+            "Maintain strong human oversight and quality control",
+            "Monitor regulatory and compliance updates"
+        ],
+    })
+    l3_cards.append({
+        "cardType": "steps",
+        "title": "Execution Roadmap",
+        "stepItems": [
+            "Conduct a team capability assessment",
+            "Pilot a small high-impact project",
+            "Measure metrics and collect user feedback",
+            "Scale successful practices across the organization"
+        ],
+    })
+    l3_cards.append({
+        "cardType": "quiz",
+        "title": "Check Your Understanding",
+        "quizData": {
+            "question": f"What is the recommended best practice when adopting {topic_label} strategically?",
+            "options": [
+                {"id": "A", "label": "A", "text": "Pilot a small high-impact project with strong human oversight"},
+                {"id": "B", "label": "B", "text": "Completely replace all teams overnight without testing"},
+                {"id": "C", "label": "C", "text": "Ignore industry trends until competitors take over"},
             ],
+            "correctOptionId": "A",
         },
-        {
-            "id": "card_4",
-            "cardType": "steps",
-            "title": "Execution Roadmap",
-            "stepItems": [
-                "Conduct a team capability assessment",
-                "Pilot a small high-impact project",
-                "Measure metrics and collect user feedback",
-                "Scale successful practices across the organization"
-            ],
-        },
-        {
-            "id": "card_5",
-            "cardType": "quiz",
-            "title": "Check Your Understanding",
-            "quizData": {
-                "question": f"What is the recommended best practice when adopting {topic_label} strategically?",
-                "options": [
-                    {"id": "A", "label": "A", "text": "Pilot a small high-impact project with strong human oversight"},
-                    {"id": "B", "label": "B", "text": "Completely replace all teams overnight without testing"},
-                    {"id": "C", "label": "C", "text": "Ignore industry trends until competitors take over"},
-                ],
-                "correctOptionId": "A",
-            },
-        },
-    ]
+    })
+    for i, card in enumerate(l3_cards, start=1):
+        card["id"] = f"card_{i}"
 
     return [
         {
@@ -278,21 +260,21 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
             "title": f"1. Introduction: {short_headline}",
             "description": f"Learn the core facts, background, and summary of {topic_label}.",
             "cards_data": l1_cards,
-            "estimated_minutes": 5,
+            "estimated_minutes": max(3, math.ceil(len(l1_cards) * 1.2)),
         },
         {
             "sequence_order": 2,
             "title": f"2. Deep Dive & Analysis: {topic_label}",
             "description": f"Analyze the broader context, expert perspectives, and technical implications of {topic_label}.",
             "cards_data": l2_cards,
-            "estimated_minutes": 5,
+            "estimated_minutes": max(3, math.ceil(len(l2_cards) * 1.2)),
         },
         {
             "sequence_order": 3,
             "title": f"3. Strategic Execution: {topic_label}",
             "description": f"Master practical steps, future outlook, and strategic execution for {topic_label}.",
             "cards_data": l3_cards,
-            "estimated_minutes": 5,
+            "estimated_minutes": max(3, math.ceil(len(l3_cards) * 1.2)),
         },
     ]
 
@@ -385,7 +367,7 @@ async def _ensure_news_learning_path(
         "level": "Beginner",
         "total_lessons": total_lessons,
         "total_minutes": total_minutes,
-        "total_cards": 5,
+        "total_cards": len(multi_lessons_data[0]["cards_data"]),
         "image_url": image_url,
         "description": description,
     }
