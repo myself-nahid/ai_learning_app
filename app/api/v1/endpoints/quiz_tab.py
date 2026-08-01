@@ -388,9 +388,15 @@ async def get_quiz_dashboard(
             news_quiz_contexts.append(ctx)
 
     # Fetch Quiz Sets and group by Category (now includes auto-created sets)
+    # ── Filter Quiz Sets by selected categories (supports multi-selection) ───
+    selected_cats = [c.strip() for c in (category_tab or "For You").split(",") if c.strip()]
+    if not selected_cats:
+        selected_cats = ["For You"]
+
     query = select(QuizSet)
-    if category_tab != "For You" and category_tab != "Trending":
-        query = query.filter(QuizSet.category == category_tab)
+    is_for_you_mode = "For You" in selected_cats or "Trending" in selected_cats
+    if not is_for_you_mode:
+        query = query.filter(QuizSet.category.in_(selected_cats))
 
     sets_res = await db.execute(query)
     quiz_sets = sets_res.scalars().all()
@@ -464,10 +470,10 @@ async def get_quiz_dashboard(
                 progress_percentage=100,
             )
 
-    # ── Build categories dict strictly for selected tab ────────────────────────
+    # ── Build categories dict strictly for selected categories ────────────────
     categories_dict: dict = {}
 
-    if category_tab == "For You" or category_tab == "Trending":
+    if is_for_you_mode:
         for_you_cards = []
         for ctx in news_quiz_contexts:
             st, sc, att_id = _get_user_quiz_set_status(all_attempts, ctx["quiz_set_id"])
@@ -486,26 +492,29 @@ async def get_quiz_dashboard(
             ))
         categories_dict["For You"] = for_you_cards
     else:
-        cat_cards = []
-        for q_set in quiz_sets:
-            st, sc, att_id = _get_user_quiz_set_status(all_attempts, q_set.id)
-            q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
-            actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
+        for cat in selected_cats:
+            cat_sets = [q for q in quiz_sets if q.category == cat]
+            cat_cards = []
+            for q_set in cat_sets:
+                st, sc, att_id = _get_user_quiz_set_status(all_attempts, q_set.id)
+                q_count_res = await db.execute(select(QuizQuestion).filter(QuizQuestion.quiz_set_id == q_set.id))
+                actual_total = len(q_count_res.scalars().all()) or q_set.total_questions
 
-            cat_cards.append(QuizSetCardSchema(
-                quiz_set_id=q_set.id,
-                title=q_set.title,
-                description=q_set.description,
-                category=q_set.category,
-                level=q_set.level,
-                total_questions=actual_total,
-                estimated_minutes=q_set.estimated_minutes,
-                xp_reward=q_set.xp_reward,
-                status=st,
-                score=sc,
-                last_attempt_id=att_id,
-            ))
-        categories_dict[category_tab] = cat_cards
+                cat_cards.append(QuizSetCardSchema(
+                    quiz_set_id=q_set.id,
+                    title=q_set.title,
+                    description=q_set.description,
+                    category=q_set.category,
+                    level=q_set.level,
+                    total_questions=actual_total,
+                    estimated_minutes=q_set.estimated_minutes,
+                    xp_reward=q_set.xp_reward,
+                    status=st,
+                    score=sc,
+                    last_attempt_id=att_id,
+                ))
+            if cat_cards:
+                categories_dict[cat] = cat_cards
 
     # Build full category list for tab bar
     distinct_cat_res = await db.execute(select(distinct(QuizSet.category)))
