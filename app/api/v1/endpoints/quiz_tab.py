@@ -131,9 +131,12 @@ async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
     db.add(new_qs)
     await db.flush()
 
+    # Capture ID before commit (commit expires ORM attributes)
+    saved_qs_id = new_qs.id
+
     for qd in questions_data:
         q = QQ(
-            quiz_set_id=new_qs.id,
+            quiz_set_id=saved_qs_id,
             question_text=qd["question_text"],
             options=qd["options"],
             correct_option_key=qd["correct_option_key"],
@@ -143,7 +146,7 @@ async def _ensure_news_quiz_set(db: AsyncSession, article) -> Optional[dict]:
     await db.commit()
 
     return {
-        "quiz_set_id": new_qs.id,
+        "quiz_set_id": saved_qs_id,
         "title": quiz_title,
         "description": description,
         "category": topic,

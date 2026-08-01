@@ -260,11 +260,15 @@ async def _ensure_news_learning_path(
     )
     db.add(new_lesson)
     await db.flush()  # Assigns new_lesson.id
+
+    # Capture IDs NOW (before commit, which expires ORM attributes)
+    saved_path_id = new_path.id
+    saved_lesson_id = new_lesson.id
     await db.commit()
 
     return {
-        "path_id": new_path.id,
-        "lesson_id": new_lesson.id,
+        "path_id": saved_path_id,
+        "lesson_id": saved_lesson_id,
         "title": display_title,
         "path_title": display_title,
         "level": "Beginner",
@@ -746,15 +750,21 @@ async def get_lesson_content(
 ):
     lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
     lesson = lesson_res.scalars().first()
-    
+
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
-    
+
+    # Capture all lesson data into plain variables NOW (before any commit that would expire ORM attrs)
+    lesson_cards_data = lesson.cards_data
+    lesson_title = lesson.title or "Lesson"
+    lesson_path_id = lesson.path_id
+    lesson_estimated_minutes = lesson.estimated_minutes or 5
+
     cards_done = 0
     try:
         prog_res = await db.execute(
             select(UserLessonProgress).filter(
-                UserLessonProgress.user_id == current_user.id, 
+                UserLessonProgress.user_id == current_user.id,
                 UserLessonProgress.lesson_id == lesson_id
             )
         )
@@ -763,9 +773,9 @@ async def get_lesson_content(
 
         if not progs:
             progress = UserLessonProgress(
-                user_id=current_user.id, 
-                lesson_id=lesson.id, 
-                path_id=lesson.path_id, 
+                user_id=current_user.id,
+                lesson_id=lesson_id,
+                path_id=lesson_path_id,
                 cards_completed=0,
                 status="in_progress",
                 last_accessed=now,
@@ -774,25 +784,27 @@ async def get_lesson_content(
         else:
             progress = progs[0]
             progress.last_accessed = now
-            if not progress.path_id and lesson.path_id:
-                progress.path_id = lesson.path_id
+            if not progress.path_id and lesson_path_id:
+                progress.path_id = lesson_path_id
             if progress.status != "completed":
                 progress.status = "in_progress"
 
+        # Snapshot cards_done BEFORE commit (commit expires progress ORM attrs)
+        cards_done = (progress.cards_completed or 0) if progress.cards_completed is not None else 0
         await db.commit()
-        cards_done = progress.cards_completed if (progress and progress.cards_completed is not None) else 0
     except Exception as e:
         print(f"Warning: Failed to update UserLessonProgress in get_lesson_content: {e}")
         await db.rollback()
 
-    normalized = _normalize_lesson_cards(lesson.cards_data, lesson.title)
+    # Use the captured plain variables — never touch lesson.* after commit
+    normalized = _normalize_lesson_cards(lesson_cards_data, lesson_title)
     total_cards = len(normalized)
 
     return {
-        "lesson_id": lesson.id,
-        "path_id": lesson.path_id,
-        "title": lesson.title,
-        "estimated_minutes": lesson.estimated_minutes or 5,
+        "lesson_id": lesson_id,
+        "path_id": lesson_path_id,
+        "title": lesson_title,
+        "estimated_minutes": lesson_estimated_minutes,
         "total_cards": total_cards,
         "cards_completed": cards_done,
         "cards": normalized,
@@ -949,71 +961,4 @@ async def complete_lesson(
         "streak_updated": True,
         "pulse_updated": True,
     }
-
-
-@router.post("/test/seed-learn-data", response_model=MessageResponse)
-async def seed_learn_data(db: AsyncSession = Depends(get_db)):
-    # 1. Create a Learning Path
-    path = LearningPath(
-        title="Generative AI Fundamentals",
-        description="Learn how AI creates text, images, audio, and other content.",
-        level="Beginner",
-        total_lessons=6,
-        total_minutes=30,
-        image_url="https://images.unsplash.com/photo-1677442136019-21780ecad995"
-    )
-    db.add(path)
-    await db.flush()
-
-    # 2. Create Lesson 1
-    lesson1 = Lesson(
-        path_id=path.id,
-        sequence_order=1,
-        title="What Is Generative AI?",
-        description="Learn what generative AI means and how it differs from traditional software.",
-        estimated_minutes=4,
-        cards_data=[{"type": "info", "content": "Welcome to Lesson 1!"}] # Simplified for demo
-    )
-    
-    # 3. Create Lesson 2 (Matching your UI screenshots exactly)
-    lesson2 = Lesson(
-        path_id=path.id,
-        sequence_order=2,
-        title="How AI Models Learn",
-        description="Understand training data, patterns, and model predictions.",
-        estimated_minutes=5,
-        cards_data=[
-            {
-                "type": "info",
-                "content": {
-                    "heading": "What is a Large Language Model?",
-                    "text": "A large language model, or LLM, is an AI system trained to understand and generate human language by learning from billions of text examples."
-                }
-            },
-            {
-                "type": "example",
-                "content": {
-                    "heading": "Think of an LLM as a pattern predictor",
-                    "text": "It reads the words that came before and predicts which word is most likely to come next — billions of times per second.",
-                    "example_block": "The sky is very -> blue"
-                }
-            },
-            {
-                "type": "quiz",
-                "content": {
-                    "question": "Which statement best describes an LLM?",
-                    "options": [
-                        "A database that stores every answer",
-                        "A model that predicts language patterns",
-                        "A search engine that only finds websites",
-                        "A robot that understands everything"
-                    ],
-                    "correct_answer": "A model that predicts language patterns"
-                }
-            }
-        ]
-    )
-    
-    db.add_all([lesson1, lesson2])
-    await db.commit()
-    return {"message": "Learn Data Seeded Successfully!"}
+

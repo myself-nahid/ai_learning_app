@@ -10,7 +10,8 @@ engine = create_async_engine(
 
 # Async session factory
 SessionLocal = async_sessionmaker(
-    autocommit=False, 
-    autoflush=False, 
-    bind=engine
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False,  # Prevent ORM attribute expiry after commit in async context
 )

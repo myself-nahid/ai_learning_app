@@ -5,19 +5,16 @@ from typing import List
 from pydantic import BaseModel
 
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore [missing-import]
-from sqlalchemy import select
+from sqlalchemy import select, func, desc
 
-
-# pyrefly: ignore [missing-import]
-from sqlalchemy.orm import selectinload
 from app.core.config import settings 
 from app.api.deps import get_db, get_current_user
-from app.db.models import AppSettings, User, UserProfile, UserProgress
-from app.schemas.user import ChangePasswordRequest, UpdateNameRequest, UpdateSettingsRequest, UserOnboarding, UserProfileCreate, UserProfileResponse, UserResponse, RegisterPushTokenRequest
+from app.db.models import AppSettings, User, UserProfile
+from app.schemas.user import ChangePasswordRequest, UpdateNameRequest, UpdateSettingsRequest, UserOnboarding, UserProfileResponse, RegisterPushTokenRequest
 from app.db.models import NewsArticle, UserNewsInteraction, UserProfile
 from app.schemas.home import NewsCardSchema 
 from app.schemas.user import UpdatePreferencesRequest
