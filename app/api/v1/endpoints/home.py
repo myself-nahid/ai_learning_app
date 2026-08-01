@@ -1,3 +1,4 @@
+import logging
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Query
 # pyrefly: ignore [missing-import]
@@ -25,6 +26,8 @@ from app.schemas.response import (
 )
 from app.services.session_service import get_or_create_daily_session
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/home", tags=["Home & News"])
 
 # Helper function to calculate "time ago"
@@ -51,7 +54,7 @@ async def get_home_dashboard(
     else: greeting = "Good evening"
     full_greeting = f"{greeting}, {current_user.full_name.split()[0]}"
 
-    # 2. FETCH DAILY PULSE PROGRESS
+    # 2. FETCH DAILY PULSE PROGRESS FOR TODAY
     session = await get_or_create_daily_session(db, current_user.id)
 
     # news_completed tracks up to 3. Lesson and Quiz are 1 each. Total = 5.
@@ -64,7 +67,10 @@ async def get_home_dashboard(
         "estimated_time_left": f"{max(0, math.ceil(8.0 - (completed * 1.6))):.1f} min left",
         "check_news": session.news_completed >= 3,
         "check_lesson": session.lesson_completed,
-        "check_quiz": session.quiz_completed
+        "check_quiz": session.quiz_completed,
+        "news_completed": session.news_completed,
+        "lesson_completed": session.lesson_completed,
+        "quiz_completed": session.quiz_completed,
     }
 
     # 3. FETCH NEWS FEED (Based on Tabs)
@@ -74,12 +80,23 @@ async def get_home_dashboard(
     )
     user_with_profile = user_res.scalars().first()
 
-    # Ensure live news articles exist in DB (auto-generate via NewsAPI & OpenAI if empty or count < 10)
-    count_res = await db.execute(select(func.count(NewsArticle.id)))
-    if (count_res.scalar() or 0) < 10:
-        from app.services.news_service import fetch_and_generate_live_news_for_user
-        user_interests = user_with_profile.profile.interests if (user_with_profile and user_with_profile.profile and user_with_profile.profile.interests) else ["Generative AI", "AI Tools", "Technology"]
-        await fetch_and_generate_live_news_for_user(db, user_interests)
+    # Ensure live news articles exist for TODAY (auto-generate via NewsAPI & OpenAI if today's count < 10 or total < 20)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_news_res = await db.execute(
+        select(func.count(NewsArticle.id)).filter(NewsArticle.published_at >= today_start)
+    )
+    today_news_count = today_news_res.scalar() or 0
+
+    total_count_res = await db.execute(select(func.count(NewsArticle.id)))
+    total_news_count = total_count_res.scalar() or 0
+
+    if today_news_count < 10 or total_news_count < 20:
+        try:
+            from app.services.news_service import fetch_and_generate_live_news_for_user
+            user_interests = user_with_profile.profile.interests if (user_with_profile and user_with_profile.profile and user_with_profile.profile.interests) else ["Generative AI", "AI Tools", "Technology"]
+            await fetch_and_generate_live_news_for_user(db, user_interests, max_articles=20)
+        except Exception as e:
+            logger.warning("Failed to auto-fetch live news for today: %s", str(e))
 
 
     query = select(NewsArticle).order_by(desc(NewsArticle.published_at))
@@ -484,17 +501,19 @@ async def mark_news_read(
     await db.flush()
 
     # 2. Get/Create today's DailySession and sync news_completed
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     session = await get_or_create_daily_session(db, current_user.id)
 
-    # 3. Explicitly count read articles and sync news_completed
+    # 3. Explicitly count read articles TODAY and sync news_completed
     read_res = await db.execute(
         select(func.count(UserNewsInteraction.id)).filter(
             UserNewsInteraction.user_id == current_user.id,
-            UserNewsInteraction.is_read == True
+            UserNewsInteraction.is_read == True,
+            UserNewsInteraction.read_at >= today_start
         )
     )
-    total_read = read_res.scalar() or 0
-    session.news_completed = min(3, max(session.news_completed, total_read))
+    total_read_today = read_res.scalar() or 0
+    session.news_completed = min(3, max(session.news_completed, total_read_today))
 
     await db.commit()
 
