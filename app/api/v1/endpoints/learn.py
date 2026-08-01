@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, date
 import math
 import json
+import random
 from typing import Any, Dict, List, Optional
 
 from app.api.deps import get_db, get_current_user
@@ -74,17 +75,49 @@ def _extract_lesson_cards_data(lesson: Optional[Any]) -> List[Any]:
     return []
 
 
+def _build_shuffled_quiz_data(
+    question: str,
+    correct_text: str,
+    distractors: List[str],
+    seed: str = ""
+) -> Dict[str, Any]:
+    """
+    Shuffles correct_text together with distractors, assigns labels A, B, C, D,
+    and dynamically sets correctOptionId to whichever label holds correct_text.
+    """
+    all_texts = [correct_text] + distractors[:3]
+    rnd = random.Random(hash(f"{seed}_{question}")) if seed else random.Random()
+    rnd.shuffle(all_texts)
+
+    labels = ["A", "B", "C", "D"]
+    options = []
+    correct_option_id = "A"
+
+    for i, text in enumerate(all_texts):
+        lbl = labels[i]
+        options.append({"id": lbl, "label": lbl, "text": text})
+        if text == correct_text:
+            correct_option_id = lbl
+
+    return {
+        "question": question,
+        "options": options,
+        "correctOptionId": correct_option_id,
+    }
+
+
 def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, Any]]:
     """
-    Build 3 structured lessons per NewsArticle, dynamically assembling cards
-    based on the news article's content_blocks (paragraphs, takeaways, quotes).
-    card counts dynamically adapt per news structure.
+    Build structured lessons dynamically per NewsArticle (between 1 and 7 lessons)
+    based on the article's depth, paragraph count, takeaways, and quote data.
+    Cards count dynamically adapt per lesson and quizzes are dynamically shuffled.
     """
     headline = (article.headline or article.title or "").strip()
     summary = (article.summary or "").strip()
     topic_label = _normalize_topic_label(article.category or article.tag or headline)
     image_url = article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop"
     content_blocks = article.content_blocks or []
+    art_id = str(article.id or headline)
 
     paragraphs: List[str] = []
     takeaways: List[str] = []
@@ -107,26 +140,40 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
 
     short_headline = _shorten_title(headline, 50)
 
-    # --- LESSON 1: Overview & Fundamentals (Dynamic card assembly) ---
-    l1_cards: List[Dict[str, Any]] = []
-    l1_cards.append({
-        "cardType": "intro",
-        "title": f"Overview: {short_headline}",
-        "bodyText": summary or f"Discover the key concepts behind {topic_label} and why it is transforming the industry.",
-        "imageUrl": image_url,
-    })
-    if paragraphs:
-        l1_cards.append({
+    # Calculate dynamic target lesson count (strictly between 1 and 7)
+    total_text_length = len(summary) + sum(len(p) for p in paragraphs)
+    score = len(paragraphs) + (len(takeaways) // 2) + (1 if quote_text else 0) + (total_text_length // 350)
+
+    if score <= 1:
+        target_count = 2 if total_text_length > 150 else 1
+    elif score <= 3:
+        target_count = 3
+    elif score <= 5:
+        target_count = 4
+    elif score <= 7:
+        target_count = 5
+    elif score <= 9:
+        target_count = 6
+    else:
+        target_count = 7
+
+    target_count = max(1, min(7, target_count))
+
+    lessons: List[Dict[str, Any]] = []
+
+    # Blueprint 1: Overview & Fundamentals
+    l1_cards: List[Dict[str, Any]] = [
+        {
             "cardType": "intro",
-            "title": "Why This Matters",
-            "bodyText": paragraphs[0],
-        })
+            "title": f"Overview: {short_headline}",
+            "bodyText": summary or f"Discover key insights behind {topic_label}.",
+            "imageUrl": image_url,
+        }
+    ]
+    if paragraphs:
+        l1_cards.append({"cardType": "intro", "title": "Why This Matters", "bodyText": paragraphs[0]})
     if takeaways:
-        l1_cards.append({
-            "cardType": "list",
-            "title": f"Key Highlights: {topic_label}",
-            "listItems": takeaways[:4],
-        })
+        l1_cards.append({"cardType": "list", "title": f"Key Highlights: {topic_label}", "listItems": takeaways[:4]})
     l1_cards.append({
         "cardType": "steps",
         "title": "Getting Started Steps",
@@ -135,148 +182,159 @@ def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, 
             f"Review how {topic_label} impacts your domain",
             "Identify potential integration points in your daily workflow",
             "Share actionable insights with key team members"
-        ],
+        ]
     })
     l1_cards.append({
         "cardType": "quiz",
         "title": "Check Your Understanding",
-        "quizData": {
-            "question": f"What is the primary topic of this lesson?",
-            "options": [
-                {"id": "A", "label": "A", "text": f"Recent developments in {topic_label}: {short_headline[:45]}"},
-                {"id": "B", "label": "B", "text": "Unrelated historical background information"},
-                {"id": "C", "label": "C", "text": "Basic computer hardware installation"},
+        "quizData": _build_shuffled_quiz_data(
+            question=f"What is the primary breakthrough reported in {topic_label}?",
+            correct_text=f"{short_headline}: {_shorten_title(summary, 60)}",
+            distractors=[
+                "Hardware price drops in global semiconductor markets",
+                "A complete shutdown of cloud data centers worldwide",
+                "Legacy database migration to paper record archives",
             ],
-            "correctOptionId": "A",
-        },
+            seed=f"{art_id}_l1"
+        )
     })
-    for i, card in enumerate(l1_cards, start=1):
-        card["id"] = f"card_{i}"
+    for i, c in enumerate(l1_cards, start=1): c["id"] = f"card_{i}"
+    lessons.append({
+        "sequence_order": 1,
+        "title": f"1. Introduction: {short_headline}",
+        "description": f"Learn the core facts, background, and summary of {topic_label}.",
+        "cards_data": l1_cards,
+        "estimated_minutes": max(3, math.ceil(len(l1_cards) * 1.2)),
+    })
 
-    # --- LESSON 2: Deep Dive & Technical Analysis (Dynamic card assembly) ---
-    l2_cards: List[Dict[str, Any]] = []
-    p2 = paragraphs[1] if len(paragraphs) > 1 else (paragraphs[0] if paragraphs else summary)
-    l2_cards.append({
-        "cardType": "intro",
-        "title": f"Deep Dive: {topic_label} Insights",
-        "bodyText": p2,
-        "imageUrl": image_url,
-    })
-    l2_cards.append({
-        "cardType": "comparison",
-        "title": "Traditional Approach vs. AI-Powered Workflow",
-        "comparisonData": {
-            "traditionalTitle": "Traditional Approach",
-            "traditionalBullets": ["Manual execution and review", "Slower response to changes", "Fixed rules-based logic"],
-            "aiTitle": f"{topic_label} AI Advantage",
-            "aiBullets": ["Automated pattern recognition", "Real-time contextual adaptation", "Scalable decision support"]
-        },
-    })
-    if len(takeaways) > 4:
-        l2_cards.append({
-            "cardType": "list",
-            "title": "Industry Insights",
-            "listItems": takeaways[4:8],
-        })
-    l2_cards.append({
-        "cardType": "steps",
-        "title": "Analysis & Verification Steps",
-        "stepItems": [
-            "Gather baseline data before implementing change",
-            "Benchmark results against traditional methods",
-            "Refine prompt instructions and workflow rules",
-            "Evaluate accuracy and overall ROI"
-        ],
-    })
-    l2_cards.append({
-        "cardType": "quiz",
-        "title": "Check Your Understanding",
-        "quizData": {
-            "question": f"How does the {topic_label} solution compare to traditional methods?",
-            "options": [
-                {"id": "A", "label": "A", "text": "It automates pattern analysis and accelerates workflows"},
-                {"id": "B", "label": "B", "text": "It requires more manual work and is significantly slower"},
-                {"id": "C", "label": "C", "text": "It has no measurable difference from legacy methods"},
-            ],
-            "correctOptionId": "A",
-        },
-    })
-    for i, card in enumerate(l2_cards, start=1):
-        card["id"] = f"card_{i}"
-
-    # --- LESSON 3: Strategic Execution (Dynamic card assembly) ---
-    l3_cards: List[Dict[str, Any]] = []
-    l3_cards.append({
-        "cardType": "intro",
-        "title": f"Strategy: Future Impact of {topic_label}",
-        "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial for long-term growth and leadership.",
-        "imageUrl": image_url,
-    })
-    if quote_text:
-        l3_cards.append({
-            "cardType": "intro",
-            "title": "Expert Perspective",
-            "bodyText": f'"{quote_text}"',
-        })
-    l3_cards.append({
-        "cardType": "list",
-        "title": "Strategic Principles",
-        "listItems": [
-            "Align AI adoption with core business objectives",
-            "Invest in continuous learning and skill upgrade",
-            "Maintain strong human oversight and quality control",
-            "Monitor regulatory and compliance updates"
-        ],
-    })
-    l3_cards.append({
-        "cardType": "steps",
-        "title": "Execution Roadmap",
-        "stepItems": [
-            "Conduct a team capability assessment",
-            "Pilot a small high-impact project",
-            "Measure metrics and collect user feedback",
-            "Scale successful practices across the organization"
-        ],
-    })
-    l3_cards.append({
-        "cardType": "quiz",
-        "title": "Check Your Understanding",
-        "quizData": {
-            "question": f"What is the recommended best practice when adopting {topic_label} strategically?",
-            "options": [
-                {"id": "A", "label": "A", "text": "Pilot a small high-impact project with strong human oversight"},
-                {"id": "B", "label": "B", "text": "Completely replace all teams overnight without testing"},
-                {"id": "C", "label": "C", "text": "Ignore industry trends until competitors take over"},
-            ],
-            "correctOptionId": "A",
-        },
-    })
-    for i, card in enumerate(l3_cards, start=1):
-        card["id"] = f"card_{i}"
-
-    return [
-        {
-            "sequence_order": 1,
-            "title": f"1. Introduction: {short_headline}",
-            "description": f"Learn the core facts, background, and summary of {topic_label}.",
-            "cards_data": l1_cards,
-            "estimated_minutes": max(3, math.ceil(len(l1_cards) * 1.2)),
-        },
-        {
+    if target_count >= 2:
+        p2 = paragraphs[1] if len(paragraphs) > 1 else (paragraphs[0] if paragraphs else summary)
+        l2_cards: List[Dict[str, Any]] = [
+            {"cardType": "intro", "title": f"Deep Dive: {topic_label} Insights", "bodyText": p2, "imageUrl": image_url},
+            {
+                "cardType": "comparison",
+                "title": "Traditional Approach vs. AI-Powered Workflow",
+                "comparisonData": {
+                    "traditionalTitle": "Traditional Approach",
+                    "traditionalBullets": ["Manual execution & review", "Slower adaptation to changes", "Fixed rules-based logic"],
+                    "aiTitle": f"{topic_label} Advantage",
+                    "aiBullets": ["Automated pattern recognition", "Real-time contextual adaptation", "Scalable decision support"]
+                }
+            },
+            {
+                "cardType": "steps",
+                "title": "Analysis & Verification Steps",
+                "stepItems": [
+                    "Gather baseline data before implementing change",
+                    "Benchmark results against traditional methods",
+                    "Refine prompt instructions and workflow rules",
+                    "Evaluate accuracy and overall ROI"
+                ]
+            },
+            {
+                "cardType": "quiz",
+                "title": "Check Your Understanding",
+                "quizData": _build_shuffled_quiz_data(
+                    question=f"Based on the analysis of {topic_label}, why does this development matter?",
+                    correct_text=_shorten_title(p2, 70),
+                    distractors=[
+                        "It restricts software processing to offline desktop calculators",
+                        "It only impacts legacy mainframes manufactured before 2000",
+                        "It eliminates the need for any digital communication tools",
+                    ],
+                    seed=f"{art_id}_l2"
+                )
+            }
+        ]
+        for i, c in enumerate(l2_cards, start=1): c["id"] = f"card_{i}"
+        lessons.append({
             "sequence_order": 2,
             "title": f"2. Deep Dive & Analysis: {topic_label}",
             "description": f"Analyze the broader context, expert perspectives, and technical implications of {topic_label}.",
             "cards_data": l2_cards,
             "estimated_minutes": max(3, math.ceil(len(l2_cards) * 1.2)),
-        },
-        {
+        })
+
+    if target_count >= 3:
+        t_takeaway = takeaways[0] if takeaways else f"key advancements in {topic_label}"
+        l3_cards: List[Dict[str, Any]] = [
+            {"cardType": "intro", "title": f"Strategy: Future Impact of {topic_label}", "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial.", "imageUrl": image_url},
+        ]
+        if quote_text:
+            l3_cards.append({"cardType": "intro", "title": "Expert Perspective", "bodyText": f'"{quote_text}"'})
+        l3_cards.extend([
+            {
+                "cardType": "list",
+                "title": "Strategic Principles",
+                "listItems": ["Align adoption with core objectives", "Invest in continuous learning", "Maintain human oversight", "Monitor compliance"]
+            },
+            {
+                "cardType": "steps",
+                "title": "Execution Roadmap",
+                "stepItems": ["Conduct capability assessment", "Pilot high-impact project", "Measure metrics & feedback", "Scale successful practices"]
+            },
+            {
+                "cardType": "quiz",
+                "title": "Check Your Understanding",
+                "quizData": _build_shuffled_quiz_data(
+                    question=f"What is the recommended strategic takeaway for teams adopting {topic_label}?",
+                    correct_text=f"Pilot a structured approach focusing on: {_shorten_title(t_takeaway, 50)}",
+                    distractors=[
+                        "Discontinue all quality and compliance checks immediately",
+                        "Ignore industry trends until competitors completely take over",
+                        "Outsource all strategic decisions without human oversight",
+                    ],
+                    seed=f"{art_id}_l3"
+                )
+            }
+        ])
+        for i, c in enumerate(l3_cards, start=1): c["id"] = f"card_{i}"
+        lessons.append({
             "sequence_order": 3,
             "title": f"3. Strategic Execution: {topic_label}",
             "description": f"Master practical steps, future outlook, and strategic execution for {topic_label}.",
             "cards_data": l3_cards,
             "estimated_minutes": max(3, math.ceil(len(l3_cards) * 1.2)),
-        },
-    ]
+        })
+
+    if target_count >= 4:
+        p3 = paragraphs[2] if len(paragraphs) > 2 else summary
+        l4_cards: List[Dict[str, Any]] = [
+            {"cardType": "intro", "title": f"Practical Application: {topic_label}", "bodyText": p3, "imageUrl": image_url},
+            {"cardType": "list", "title": "Implementation Best Practices", "listItems": takeaways[4:8] if len(takeaways) > 4 else ["Define clear KPIs", "Ensure data privacy", "Train team members", "Establish fallback protocols"]},
+            {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"How can teams best implement {topic_label} practically?", correct_text="Define clear KPIs, train team members, and ensure data privacy", distractors=["Avoid setting measurable goals", "Never train staff on new workflows", "Remove all security protocols"], seed=f"{art_id}_l4")}
+        ]
+        for i, c in enumerate(l4_cards, start=1): c["id"] = f"card_{i}"
+        lessons.append({"sequence_order": 4, "title": f"4. Practical Application: {topic_label}", "description": f"Learn practical workflows and integration tactics for {topic_label}.", "cards_data": l4_cards, "estimated_minutes": max(3, math.ceil(len(l4_cards) * 1.2))})
+
+    if target_count >= 5:
+        l5_cards: List[Dict[str, Any]] = [
+            {"cardType": "intro", "title": f"Governance & Risk Management: {topic_label}", "bodyText": f"Managing risks and maintaining compliance is vital when leveraging {topic_label}.", "imageUrl": image_url},
+            {"cardType": "steps", "title": "Risk Mitigation Protocol", "stepItems": ["Identify potential compliance gaps", "Enforce encryption and access control", "Conduct regular security audits", "Maintain transparent reporting"]},
+            {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"What is essential for risk governance in {topic_label}?", correct_text="Conducting regular security audits and enforcing access control", distractors=["Disabling user authentication", "Hiding audit reports from leadership", "Storing credentials in public forums"], seed=f"{art_id}_l5")}
+        ]
+        for i, c in enumerate(l5_cards, start=1): c["id"] = f"card_{i}"
+        lessons.append({"sequence_order": 5, "title": f"5. Governance & Risk: {topic_label}", "description": f"Explore governance frameworks and risk management for {topic_label}.", "cards_data": l5_cards, "estimated_minutes": max(3, math.ceil(len(l5_cards) * 1.2))})
+
+    if target_count >= 6:
+        l6_cards: List[Dict[str, Any]] = [
+            {"cardType": "intro", "title": f"Real-World Impact & Case Study: {topic_label}", "bodyText": f"Examine how industry leaders are applying {topic_label} to achieve measurable results.", "imageUrl": image_url},
+            {"cardType": "list", "title": "Key Outcomes Observed", "listItems": ["30% efficiency increase in routine tasks", "Accelerated time-to-market for new features", "Improved decision confidence among stakeholders", "Enhanced scalability across teams"]},
+            {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"What real-world impact is commonly seen with {topic_label}?", correct_text="Increased operational efficiency and accelerated decision making", distractors=["Immediate operational slowdowns", "Total loss of project visibility", "Exponential increase in manual errors"], seed=f"{art_id}_l6")}
+        ]
+        for i, c in enumerate(l6_cards, start=1): c["id"] = f"card_{i}"
+        lessons.append({"sequence_order": 6, "title": f"6. Real-World Impact: {topic_label}", "description": f"Analyze case studies and real-world outcomes of {topic_label}.", "cards_data": l6_cards, "estimated_minutes": max(3, math.ceil(len(l6_cards) * 1.2))})
+
+    if target_count >= 7:
+        l7_cards: List[Dict[str, Any]] = [
+            {"cardType": "intro", "title": f"Strategic Masterclass & Future Outlook: {topic_label}", "bodyText": f"Looking ahead, {topic_label} is poised to redefine long-term strategic advantage.", "imageUrl": image_url},
+            {"cardType": "steps", "title": "Mastery Execution Plan", "stepItems": ["Integrate predictive analytics into core product", "Establish cross-functional innovation pods", "Continuously refine custom domain models", "Lead industry benchmark standards"]},
+            {"cardType": "quiz", "title": "Check Your Understanding", "quizData": _build_shuffled_quiz_data(question=f"What marks the pinnacle of strategic mastery in {topic_label}?", correct_text="Leading industry benchmark standards through continuous innovation", distractors=["Abandoning all innovation efforts", "Stagnating product capabilities indefinitely", "Ignoring customer feedback and market metrics"], seed=f"{art_id}_l7")}
+        ]
+        for i, c in enumerate(l7_cards, start=1): c["id"] = f"card_{i}"
+        lessons.append({"sequence_order": 7, "title": f"7. Strategic Masterclass: {topic_label}", "description": f"Master executive leadership and long-term vision for {topic_label}.", "cards_data": l7_cards, "estimated_minutes": max(3, math.ceil(len(l7_cards) * 1.2))})
+
+    return lessons
 
 
 async def _ensure_news_learning_path(
@@ -727,8 +785,11 @@ async def get_learn_dashboard(
         })
 
     for p in paths:
-        for les in p.lessons:
-            if les.id not in {c["lesson_id"] for c in candidate_lessons}:
+        sorted_p_lessons = sorted(p.lessons, key=lambda x: x.sequence_order)
+        for idx, les in enumerate(sorted_p_lessons):
+            prev_les = sorted_p_lessons[idx - 1] if idx > 0 else None
+            is_unlocked = (idx == 0) or (prev_les and prev_les.id in completed_lesson_ids)
+            if is_unlocked and les.id not in {c["lesson_id"] for c in candidate_lessons}:
                 candidate_lessons.append({
                     "id": les.id,
                     "lesson_id": les.id,
@@ -796,22 +857,21 @@ async def get_path_details(
         total_c = len(cards_data) if cards_data else 1
         cards_done = 0
 
+        # Sequential unlock: Lesson 1 is unlocked; subsequent lessons unlock ONLY when previous is completed
+        prev_lesson = sorted_lessons[idx - 1] if idx > 0 else None
+        prev_prog = progress_map.get(prev_lesson.id) if prev_lesson else None
+        prev_is_completed = (idx == 0) or (prev_prog and prev_prog.status == "completed")
+
         if prog and prog.status == "completed":
             status = "completed"
-            # Use stored cards_completed if available, otherwise use total_c
             cards_done = prog.cards_completed if prog.cards_completed else total_c
             completed_count += 1
-        elif prog and prog.status == "in_progress":
+        elif prev_is_completed:
             status = "in_progress"
-            cards_done = prog.cards_completed or 0
+            cards_done = prog.cards_completed if (prog and prog.cards_completed) else 0
         else:
-            # Sequential unlock: Lesson 1 always available; subsequent lessons unlock when previous is completed
-            prev_lesson = sorted_lessons[idx - 1] if idx > 0 else None
-            prev_prog = progress_map.get(prev_lesson.id) if prev_lesson else None
-            if idx == 0 or (prev_prog and prev_prog.status == "completed"):
-                status = "in_progress"
-            else:
-                status = "locked"
+            status = "locked"
+            cards_done = 0
 
         formatted_lessons.append({
             "lesson_id": lesson.id,
@@ -844,8 +904,28 @@ async def get_lesson_content(
     lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
     lesson = lesson_res.scalars().first()
 
-    if not lesson:
-        raise HTTPException(status_code=404, detail="Lesson not found")
+    # Guard: prevent accessing locked lessons out of sequence
+    if lesson.sequence_order and lesson.sequence_order > 1 and lesson.path_id:
+        prev_lesson_res = await db.execute(
+            select(Lesson).filter(
+                Lesson.path_id == lesson.path_id,
+                Lesson.sequence_order == lesson.sequence_order - 1
+            )
+        )
+        prev_lesson = prev_lesson_res.scalars().first()
+        if prev_lesson:
+            prev_prog_res = await db.execute(
+                select(UserLessonProgress).filter(
+                    UserLessonProgress.user_id == current_user.id,
+                    UserLessonProgress.lesson_id == prev_lesson.id,
+                    UserLessonProgress.status == "completed"
+                )
+            )
+            if not prev_prog_res.scalars().first():
+                raise HTTPException(
+                    status_code=403,
+                    detail="This lesson is locked. Complete the previous lesson first."
+                )
 
     # Capture all lesson data into plain variables NOW (before any commit that would expire ORM attrs)
     lesson_cards_data = lesson.cards_data

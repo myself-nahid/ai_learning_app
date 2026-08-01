@@ -1,5 +1,5 @@
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, BackgroundTasks
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore [missing-import]
@@ -193,25 +193,63 @@ async def admin_login(user_in: UserLogin, db: AsyncSession = Depends(get_db)):
         }
     )
 
-# 5. REFRESH TOKEN (Using PyJWTError)
+# 5. REFRESH TOKEN
 @router.post("/refresh", response_model=StandardResponse)
-async def refresh_token(refresh_token: str = Header(...)):
+async def refresh_token(
+    request: Request,
+    authorization: str = Header(None),
+    refresh_token_header: str = Header(None, alias="refresh-token"),
+    refresh_token_header_underscore: str = Header(None, alias="refresh_token"),
+    db: AsyncSession = Depends(get_db)
+):
+    token = None
+    if authorization:
+        token = authorization.replace("Bearer ", "").replace("bearer ", "").strip()
+    elif refresh_token_header:
+        token = refresh_token_header.replace("Bearer ", "").replace("bearer ", "").strip()
+    elif refresh_token_header_underscore:
+        token = refresh_token_header_underscore.replace("Bearer ", "").replace("bearer ", "").strip()
+    else:
+        try:
+            body = await request.json()
+            token = body.get("refresh_token") or body.get("refreshToken")
+        except Exception:
+            token = None
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Refresh token is required")
+
     try:
-        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Invalid token type")
 
         user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token subject")
+
+        user_result = await db.execute(
+            select(User).options(selectinload(User.profile)).filter(User.id == int(user_id))
+        )
+        user = user_result.scalars().first()
+
+        if not user or user.is_suspended:
+            raise HTTPException(status_code=401, detail="User account inactive or suspended")
+
+        is_onboarded = user.profile is not None
+
+        new_access_token = create_access_token(user.id)
+        new_refresh_token = create_refresh_token(user.id)
 
         return StandardResponse(
             success=True,
             message="Token refreshed successfully!",
             data={
-                "access_token": create_access_token(user_id),
-                "refresh_token": refresh_token,
+                "access_token": new_access_token,
+                "refresh_token": new_refresh_token,
                 "token_type": "bearer",
-                "is_onboarded": False
+                "is_onboarded": is_onboarded
             }
         )
 
