@@ -1,5 +1,7 @@
 import logging
+# pyrefly: ignore [missing-import]
 from sqlalchemy import text
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select
 from app.db.session import SessionLocal, engine
 from app.db.models import LearningPath, Lesson, QuizSet, QuizQuestion, NewsArticle

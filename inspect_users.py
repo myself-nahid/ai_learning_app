@@ -1,4 +1,5 @@
 import asyncio
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.db.models import User

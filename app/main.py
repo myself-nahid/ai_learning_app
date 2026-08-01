@@ -1,7 +1,11 @@
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+# pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
+# pyrefly: ignore [missing-import]
 from sqlalchemy import text
 
 from app.api.v1.endpoints import auth, users, content, quizzes, home, learn, quiz_tab, daily_briefing, admin, notifications
@@ -42,7 +46,7 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(
-    title="AI Learning Platform API",
+    title="Tod AI Learning Platform API",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -76,4 +80,4 @@ app.mount("/static", StaticFiles(directory="uploads"), name="static")
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the AI Learning Platform API"}
+    return {"message": "Welcome to the Tod-AI Learning Platform API"}

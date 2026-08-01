@@ -2,7 +2,9 @@ import asyncio
 import json
 import sys
 
+# pyrefly: ignore [missing-import]
 import httpx
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select
 import sys
 from pathlib import Path

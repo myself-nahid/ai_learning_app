@@ -1,7 +1,10 @@
 import logging
 from datetime import date, datetime
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select
+# pyrefly: ignore [missing-import]
 from sqlalchemy import func, or_
 
 from app.db.models import DailySession, UserNewsInteraction
