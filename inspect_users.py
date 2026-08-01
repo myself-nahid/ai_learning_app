@@ -1,5 +1,5 @@
 import asyncio
-from sqlalchemy.future import select
+from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.db.models import User
 

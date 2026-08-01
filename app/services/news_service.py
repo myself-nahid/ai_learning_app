@@ -148,7 +148,7 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
     Stores the results directly in the database.
     """
     from datetime import datetime
-    from sqlalchemy.future import select
+    from sqlalchemy import select
     from app.db.models import NewsArticle
     from app.services.ai_service import transform_news_to_todai_format
 
@@ -210,4 +210,4 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
         logger.info("Successfully created %d live AI news articles via NewsAPI & OpenAI!", len(created_articles))
 
     return created_articles
-
+

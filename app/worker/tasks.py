@@ -3,8 +3,9 @@ import logging
 from datetime import datetime
 import random
 
-from sqlalchemy.future import select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+
 
 from app.worker.celery_app import celery_app
 from app.db.session import SessionLocal

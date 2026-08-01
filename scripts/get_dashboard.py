@@ -3,7 +3,7 @@ import json
 import sys
 
 import httpx
-from sqlalchemy.future import select
+from sqlalchemy import select
 import sys
 from pathlib import Path
 

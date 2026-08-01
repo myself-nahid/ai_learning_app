@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload 
 import jwt
 from datetime import datetime

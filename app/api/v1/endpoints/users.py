@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, desc
-from sqlalchemy.future import select
+from sqlalchemy import select
 
 
 from sqlalchemy.orm import selectinload

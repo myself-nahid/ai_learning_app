@@ -1,6 +1,6 @@
 import logging
 from sqlalchemy import text
-from sqlalchemy.future import select
+from sqlalchemy import select
 from app.db.session import SessionLocal, engine
 from app.db.models import LearningPath, Lesson, QuizSet, QuizQuestion, NewsArticle
 

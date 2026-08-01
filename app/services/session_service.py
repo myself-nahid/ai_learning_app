@@ -1,7 +1,7 @@
 import logging
 from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy import select
 from sqlalchemy import func, or_
 
 from app.db.models import DailySession, UserNewsInteraction
