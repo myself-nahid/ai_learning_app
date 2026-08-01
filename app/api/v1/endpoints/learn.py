@@ -74,28 +74,19 @@ def _extract_lesson_cards_data(lesson: Optional[Any]) -> List[Any]:
     return []
 
 
-def _build_lesson_cards_from_article(article: "NewsArticle") -> List[Dict[str, Any]]:
+def _build_multi_lessons_from_article(article: "NewsArticle") -> List[Dict[str, Any]]:
     """
-    Build rich lesson cards from a real NewsArticle's content_blocks, summary, and headline.
-    Always returns at least 3 cards: intro + key points + quiz.
+    Build 3 structured lessons per NewsArticle, each containing EXACTLY 5 cards:
+    - Lesson 1: Introduction & Overview (5 cards)
+    - Lesson 2: Deep Dive & Technical Analysis (5 cards)
+    - Lesson 3: Strategic Execution & Future Impact (5 cards)
     """
-    headline = (article.headline or "").strip()
+    headline = (article.headline or article.title or "").strip()
     summary = (article.summary or "").strip()
     topic_label = _normalize_topic_label(article.category or article.tag or headline)
     image_url = article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop"
     content_blocks = article.content_blocks or []
 
-    cards: List[Dict[str, Any]] = []
-
-    # Card 1: Intro — use the article summary
-    cards.append({
-        "cardType": "intro",
-        "title": _shorten_title(headline, 60),
-        "bodyText": summary or f"Explore the key ideas in {topic_label} and how they apply to everyday work.",
-        "imageUrl": image_url,
-    })
-
-    # Card 2: Extract paragraphs from content_blocks
     paragraphs: List[str] = []
     takeaways: List[str] = []
     quote_text: Optional[str] = None
@@ -115,86 +106,205 @@ def _build_lesson_cards_from_article(article: "NewsArticle") -> List[Dict[str, A
             if not quote_text:
                 quote_text = str(bcontent).strip()
 
-    # Card 2: First paragraph as a deeper intro card
-    if paragraphs:
-        cards.append({
+    short_headline = _shorten_title(headline, 50)
+    p1 = paragraphs[0] if len(paragraphs) > 0 else summary
+    p2 = paragraphs[1] if len(paragraphs) > 1 else (paragraphs[0] if paragraphs else summary)
+
+    # --- LESSON 1: Introduction & Overview (5 cards) ---
+    l1_cards = [
+        {
+            "id": "card_1",
+            "cardType": "intro",
+            "title": f"Overview: {short_headline}",
+            "bodyText": summary or f"Discover the key concepts behind {topic_label} and why it is transforming the industry.",
+            "imageUrl": image_url,
+        },
+        {
+            "id": "card_2",
             "cardType": "intro",
             "title": "Why This Matters",
-            "bodyText": paragraphs[0],
-        })
-
-    # Card 3: Key takeaways as a list card
-    if takeaways:
-        cards.append({
+            "bodyText": p1,
+        },
+        {
+            "id": "card_3",
             "cardType": "list",
-            "title": f"Key Takeaways from {topic_label}",
-            "listItems": takeaways[:6],  # Max 6 items
-        })
-    elif len(paragraphs) > 1:
-        # Fall back: use bullet-style sentences from the second paragraph
-        sentences = [s.strip() for s in paragraphs[1].replace(".", ".|").split("|") if s.strip()][:4]
-        if sentences:
-            cards.append({
-                "cardType": "list",
-                "title": "Key Points",
-                "listItems": sentences,
-            })
+            "title": f"Key Highlights: {topic_label}",
+            "listItems": takeaways[:4] if takeaways else [
+                f"{topic_label} introduces new workflow capabilities",
+                "Streamlines decision-making and operational speed",
+                "Enhances overall productivity across key departments"
+            ],
+        },
+        {
+            "id": "card_4",
+            "cardType": "steps",
+            "title": "Getting Started Steps",
+            "stepItems": [
+                f"Understand the core premise: {short_headline}",
+                f"Review how {topic_label} impacts your domain",
+                "Identify potential integration points in your daily workflow",
+                "Share actionable insights with key team members"
+            ],
+        },
+        {
+            "id": "card_5",
+            "cardType": "quiz",
+            "title": "Check Your Understanding",
+            "quizData": {
+                "question": f"What is the primary topic of this lesson?",
+                "options": [
+                    {"id": "A", "label": "A", "text": f"Recent developments in {topic_label}: {short_headline[:45]}"},
+                    {"id": "B", "label": "B", "text": "Unrelated historical background information"},
+                    {"id": "C", "label": "C", "text": "Basic computer hardware installation"},
+                ],
+                "correctOptionId": "A",
+            },
+        },
+    ]
 
-    # Card 4: Quote card if available
-    if quote_text:
-        cards.append({
+    # --- LESSON 2: Deep Dive & Technical Analysis (5 cards) ---
+    l2_cards = [
+        {
+            "id": "card_1",
+            "cardType": "intro",
+            "title": f"Deep Dive: {topic_label} Insights",
+            "bodyText": p2,
+            "imageUrl": image_url,
+        },
+        {
+            "id": "card_2",
+            "cardType": "comparison",
+            "title": "Traditional Approach vs. AI-Powered Workflow",
+            "comparisonData": {
+                "traditionalTitle": "Traditional Approach",
+                "traditionalBullets": ["Manual execution and review", "Slower response to changes", "Fixed rules-based logic"],
+                "aiTitle": f"{topic_label} AI Advantage",
+                "aiBullets": ["Automated pattern recognition", "Real-time contextual adaptation", "Scalable decision support"]
+            },
+        },
+        {
+            "id": "card_3",
+            "cardType": "list",
+            "title": "Industry Takeaways",
+            "listItems": takeaways[4:8] if len(takeaways) > 4 else [
+                "Early adopters report significant efficiency gains",
+                "Reduces manual overhead and speeds up task execution",
+                "Sets a new benchmark for competitive advantage"
+            ],
+        },
+        {
+            "id": "card_4",
+            "cardType": "steps",
+            "title": "Analysis & Verification Steps",
+            "stepItems": [
+                "Gather baseline data before implementing change",
+                "Benchmark results against traditional methods",
+                "Refine prompt instructions and workflow rules",
+                "Evaluate accuracy and overall ROI"
+            ],
+        },
+        {
+            "id": "card_5",
+            "cardType": "quiz",
+            "title": "Check Your Understanding",
+            "quizData": {
+                "question": f"How does the {topic_label} solution compare to traditional methods?",
+                "options": [
+                    {"id": "A", "label": "A", "text": "It automates pattern analysis and accelerates workflows"},
+                    {"id": "B", "label": "B", "text": "It requires more manual work and is significantly slower"},
+                    {"id": "C", "label": "C", "text": "It has no measurable difference from legacy methods"},
+                ],
+                "correctOptionId": "A",
+            },
+        },
+    ]
+
+    # --- LESSON 3: Strategic Execution & Future Impact (5 cards) ---
+    l3_cards = [
+        {
+            "id": "card_1",
+            "cardType": "intro",
+            "title": f"Strategy: Future Impact of {topic_label}",
+            "bodyText": f"As {topic_label} continues to evolve, strategic integration becomes crucial for long-term growth and leadership.",
+            "imageUrl": image_url,
+        },
+        {
+            "id": "card_2",
             "cardType": "intro",
             "title": "Expert Perspective",
-            "bodyText": f'"{quote_text}"',
-        })
-
-    # Card 5: Steps card — generic "how to apply" steps derived from topic
-    cards.append({
-        "cardType": "steps",
-        "title": f"How to Apply {topic_label} in Your Work",
-        "stepItems": [
-            f"1. Read and understand the core idea: {_shorten_title(headline, 50)}",
-            f"2. Identify how {topic_label} connects to your daily tasks",
-            "3. Try one small experiment or tool this week",
-            "4. Share what you learned with your team",
-            "5. Revisit next week to track progress",
-        ],
-    })
-
-    # Final card: Knowledge check quiz
-    option_a = f"{topic_label} is a new tool or development"
-    option_b = "It has no practical impact on work"
-    option_c = "It only affects a small number of experts"
-    cards.append({
-        "cardType": "quiz",
-        "title": "Check Your Understanding",
-        "quizData": {
-            "question": f"What is the main takeaway from: {_shorten_title(headline, 55)}?",
-            "options": [
-                {"id": "A", "label": "A", "text": option_a},
-                {"id": "B", "label": "B", "text": option_b},
-                {"id": "C", "label": "C", "text": option_c},
-            ],
-            "correctOptionId": "A",
+            "bodyText": f'"{quote_text}"' if quote_text else f'"{short_headline} represents a strategic inflection point for professionals looking to stay ahead."',
         },
-    })
+        {
+            "id": "card_3",
+            "cardType": "list",
+            "title": "Strategic Principles",
+            "listItems": [
+                "Align AI adoption with core business objectives",
+                "Invest in continuous learning and skill upgrade",
+                "Maintain strong human oversight and quality control",
+                "Monitor regulatory and compliance updates"
+            ],
+        },
+        {
+            "id": "card_4",
+            "cardType": "steps",
+            "title": "Execution Roadmap",
+            "stepItems": [
+                "Conduct a team capability assessment",
+                "Pilot a small high-impact project",
+                "Measure metrics and collect user feedback",
+                "Scale successful practices across the organization"
+            ],
+        },
+        {
+            "id": "card_5",
+            "cardType": "quiz",
+            "title": "Check Your Understanding",
+            "quizData": {
+                "question": f"What is the recommended best practice when adopting {topic_label} strategically?",
+                "options": [
+                    {"id": "A", "label": "A", "text": "Pilot a small high-impact project with strong human oversight"},
+                    {"id": "B", "label": "B", "text": "Completely replace all teams overnight without testing"},
+                    {"id": "C", "label": "C", "text": "Ignore industry trends until competitors take over"},
+                ],
+                "correctOptionId": "A",
+            },
+        },
+    ]
 
-    # Assign sequential IDs
-    for i, card in enumerate(cards, start=1):
-        card["id"] = f"card_{i}"
-
-    return cards
+    return [
+        {
+            "sequence_order": 1,
+            "title": f"1. Introduction: {short_headline}",
+            "description": f"Learn the core facts, background, and summary of {topic_label}.",
+            "cards_data": l1_cards,
+            "estimated_minutes": 5,
+        },
+        {
+            "sequence_order": 2,
+            "title": f"2. Deep Dive & Analysis: {topic_label}",
+            "description": f"Analyze the broader context, expert perspectives, and technical implications of {topic_label}.",
+            "cards_data": l2_cards,
+            "estimated_minutes": 5,
+        },
+        {
+            "sequence_order": 3,
+            "title": f"3. Strategic Execution: {topic_label}",
+            "description": f"Master practical steps, future outlook, and strategic execution for {topic_label}.",
+            "cards_data": l3_cards,
+            "estimated_minutes": 5,
+        },
+    ]
 
 
 async def _ensure_news_learning_path(
     db: AsyncSession, article: "NewsArticle"
 ) -> Optional[Dict[str, Any]]:
     """
-    Find or create a real LearningPath + Lesson from a NewsArticle.
-    Returns a dict with real path_id, lesson_id, and derived metadata.
-    Never returns path_id=0 or lesson_id=0.
+    Find or create a real LearningPath + 3 Lessons from a NewsArticle.
+    Returns a dict with real path_id, lesson_id (first lesson), and derived metadata.
     """
-    headline = (article.headline or "").strip()
+    headline = (article.headline or article.title or "").strip()
     topic_label = _normalize_topic_label(article.category or article.tag or headline)
     short_headline = _shorten_title(headline, 50)
     display_title = short_headline if topic_label.lower() in short_headline.lower() else f"{topic_label}: {short_headline}"
@@ -208,7 +318,6 @@ async def _ensure_news_learning_path(
     existing_path = existing_path_res.scalars().first()
 
     if existing_path:
-        # Use existing path — load its first lesson
         lessons_res = await db.execute(
             select(Lesson)
             .filter(Lesson.path_id == existing_path.id)
@@ -218,7 +327,7 @@ async def _ensure_news_learning_path(
         if lessons:
             first_lesson = lessons[0]
             first_lesson_cards = _extract_lesson_cards_data(first_lesson)
-            actual_total_cards = len(first_lesson_cards) if first_lesson_cards else 1
+            actual_total_cards = len(first_lesson_cards) if first_lesson_cards else 5
             actual_total_lessons = len(lessons)
             actual_total_minutes = sum(l.estimated_minutes or 5 for l in lessons)
             return {
@@ -234,47 +343,49 @@ async def _ensure_news_learning_path(
                 "description": description,
             }
 
-    # ── Create new LearningPath ───────────────────────────────────────────────
-    cards_data = _build_lesson_cards_from_article(article)
-    total_cards = len(cards_data)
-    estimated_minutes = max(3, math.ceil(total_cards * 1.2))
+    # ── Create new LearningPath with 3 lessons ───────────────────────────────
+    multi_lessons_data = _build_multi_lessons_from_article(article)
+    total_lessons = len(multi_lessons_data)
+    total_minutes = sum(d["estimated_minutes"] for d in multi_lessons_data)
 
     new_path = LearningPath(
         title=display_title,
         description=description,
         level="Beginner",
-        total_lessons=1,
-        total_minutes=estimated_minutes,
+        total_lessons=total_lessons,
+        total_minutes=total_minutes,
         image_url=image_url,
     )
     db.add(new_path)
     await db.flush()  # Assigns new_path.id
 
-    new_lesson = Lesson(
-        path_id=new_path.id,
-        sequence_order=1,
-        title=display_title,
-        description=f"Understand the key ideas behind {topic_label} and how they connect to everyday work.",
-        estimated_minutes=estimated_minutes,
-        cards_data=cards_data,
-    )
-    db.add(new_lesson)
-    await db.flush()  # Assigns new_lesson.id
+    first_lesson_id = None
+    for idx, ldata in enumerate(multi_lessons_data, start=1):
+        lesson_row = Lesson(
+            path_id=new_path.id,
+            sequence_order=ldata["sequence_order"],
+            title=ldata["title"],
+            description=ldata["description"],
+            estimated_minutes=ldata["estimated_minutes"],
+            cards_data=ldata["cards_data"],
+        )
+        db.add(lesson_row)
+        await db.flush()
+        if idx == 1:
+            first_lesson_id = lesson_row.id
 
-    # Capture IDs NOW (before commit, which expires ORM attributes)
     saved_path_id = new_path.id
-    saved_lesson_id = new_lesson.id
     await db.commit()
 
     return {
         "path_id": saved_path_id,
-        "lesson_id": saved_lesson_id,
-        "title": display_title,
+        "lesson_id": first_lesson_id,
+        "title": multi_lessons_data[0]["title"],
         "path_title": display_title,
         "level": "Beginner",
-        "total_lessons": 1,
-        "total_minutes": estimated_minutes,
-        "total_cards": total_cards,
+        "total_lessons": total_lessons,
+        "total_minutes": total_minutes,
+        "total_cards": 5,
         "image_url": image_url,
         "description": description,
     }
