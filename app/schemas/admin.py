@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 
@@ -72,7 +73,9 @@ class SuspendUserRequest(BaseModel):
 class AdminProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
+    current_password: Optional[str] = None
     new_password: Optional[str] = None # Will hash this if provided
+
 
 class AdminProfileResponse(BaseModel):
     full_name: str

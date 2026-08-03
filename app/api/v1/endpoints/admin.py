@@ -22,7 +22,8 @@ import os
 import shutil
 # pyrefly: ignore [missing-import]
 from fastapi import UploadFile, File
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, verify_password
+
 from app.core.config import settings
 
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
@@ -444,6 +445,12 @@ async def update_admin_profile(
         admin.full_name = data.full_name
         
     if data.new_password:
+        if not data.current_password:
+            raise HTTPException(status_code=400, detail="Current password is required to change your password.")
+        if not verify_password(data.current_password, admin.hashed_password):
+            raise HTTPException(status_code=400, detail="Incorrect current password.")
+        if len(data.new_password) < 6:
+            raise HTTPException(status_code=400, detail="New password must be at least 6 characters long.")
         admin.hashed_password = get_password_hash(data.new_password)
         
     await db.commit()
