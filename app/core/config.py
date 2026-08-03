@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # News API Key
     NEWS_API_KEY: str
 
+    # Admin User Settings
+    FIRST_SUPERUSER_EMAIL: str = "admin@todai.app"
+    FIRST_SUPERUSER_PASSWORD: str = "admin123"
+    FIRST_SUPERUSER_FULL_NAME: str = "System Admin"
+
     DATABASE_URL: str | None = None
 
     @property

@@ -12,7 +12,9 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_admin
-from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress
+from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress, Lesson, QuizSet, DailyFeed, UserNewsInteraction, WeeklyActivity, Notification
+
+
 from app.schemas.admin import AdminDashboardResponse, AdminProfileResponse, AdminProfileUpdate, AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem, AdminUserListResponse, AppSettingsSchema, AppSettingsUpdate, KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest
 from app.schemas.response import ImageUploadResponse, MessageResponse, SuspendActionResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
@@ -58,14 +60,28 @@ async def get_dashboard_overview(
 
     # Active Users (Last 7 days)
     active_users_res = await db.execute(select(func.count(User.id)).filter(User.last_active_at >= one_week_ago))
-    active_val = active_users_res.scalar()
+    active_val = active_users_res.scalar() or 0
+
+    # Active Users Previous Week (Between 14 days ago and 7 days ago) using two_weeks_ago
+    prev_active_res = await db.execute(
+        select(func.count(User.id)).filter(
+            User.last_active_at >= two_weeks_ago,
+            User.last_active_at < one_week_ago
+        )
+    )
+    prev_active_val = prev_active_res.scalar() or 0
+
+    # Calculate active users week-over-week trend percentage & type
+    if prev_active_val > 0:
+        active_trend_pct = int(abs(active_val - prev_active_val) / prev_active_val * 100)
+        active_trend_type = "up" if active_val >= prev_active_val else "down"
+    else:
+        active_trend_pct = 100 if active_val > 0 else 0
+        active_trend_type = "up"
 
     # Suspended Users
     susp_users_res = await db.execute(select(func.count(User.id)).filter(User.is_suspended == True))
-    susp_val = susp_users_res.scalar()
-
-    # (In a real app, you would query the previous periods to calculate the trend percentages. 
-    # For this snippet, we will return calculated mock trends matching your UI).
+    susp_val = susp_users_res.scalar() or 0
 
     # --- 2. CALCULATE CHART DATA (Last 7 Days) ---
     
@@ -105,10 +121,10 @@ async def get_dashboard_overview(
 
     # --- 4. RETURN FULL RESPONSE ---
     return AdminDashboardResponse(
-        total_users=KpiCard(value=total_val, trend_percentage=12, trend_type="up", trend_text="this week"),
-        active_users=KpiCard(value=active_val, trend_percentage=5, trend_type="up", trend_text="vs last week"),
-        new_users=KpiCard(value=new_val, trend_percentage=22, trend_type="up", trend_text="vs last month"),
-        suspended_users=KpiCard(value=susp_val, trend_percentage=3, trend_type="down", trend_text="this week"),
+        total_users=KpiCard(value=total_val or 0, trend_percentage=12, trend_type="up", trend_text="this week"),
+        active_users=KpiCard(value=active_val, trend_percentage=active_trend_pct, trend_type=active_trend_type, trend_text="vs last week"),
+        new_users=KpiCard(value=new_val or 0, trend_percentage=22, trend_type="up", trend_text="vs last month"),
+        suspended_users=KpiCard(value=susp_val, trend_percentage=0, trend_type="down", trend_text="this week"),
         user_registrations_chart=reg_chart,
         daily_active_users_chart=dau_chart,
         recent_activity=formatted_logs
@@ -117,36 +133,53 @@ async def get_dashboard_overview(
 
 
 
-# 1. GET ALL USERS (List View)
+
+def format_interests(profile: UserProfile | None) -> str:
+    if not profile or not profile.interests:
+        return "N/A"
+    if isinstance(profile.interests, list):
+        return ", ".join([str(i) for i in profile.interests]) if len(profile.interests) > 0 else "N/A"
+    return str(profile.interests)
+
+
+# 1. GET ALL USERS (List View - Non-Admin Accounts)
 @router.get("/users", response_model=AdminUserListResponse)
 async def get_all_users(
     search: str = "",
     skip: int = 0,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin)
+    _admin: User = Depends(get_current_admin)
 ):
-    query = select(User).options(selectinload(User.profile)).order_by(User.created_at.desc())
+    # Exclude admins/superusers from normal user list
+    query = select(User).options(selectinload(User.profile)).filter(
+        User.is_superuser == False,
+        or_(User.role == None, User.role != "admin")
+    ).order_by(User.created_at.desc())
     
+    count_query = select(func.count(User.id)).filter(
+        User.is_superuser == False,
+        or_(User.role == None, User.role != "admin")
+    )
+
     # Apply Search Filter
     if search:
-        query = query.filter(
-            or_(User.full_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%"))
-        )
+        search_filter = or_(User.full_name.ilike(f"%{search}%"), User.email.ilike(f"%{search}%"))
+        query = query.filter(search_filter)
+        count_query = count_query.filter(search_filter)
 
     result = await db.execute(query.offset(skip).limit(limit))
     users = result.scalars().all()
 
     # Total count for pagination
-    total_res = await db.execute(select(func.count(User.id)))
-    total_accounts = total_res.scalar()
+    total_res = await db.execute(count_query)
+    total_accounts = total_res.scalar() or 0
 
     formatted_users = []
     for u in users:
         # Default fallbacks if profile missing
         level = u.profile.ai_level if u.profile else "N/A"
-        # Since interests is a JSON list, grab the first one for the UI table
-        interest = u.profile.interests[0] if u.profile and u.profile.interests else "N/A"
+        interest = format_interests(u.profile)
         status = "Suspended" if u.is_suspended else "Active"
 
         formatted_users.append(AdminUserListItem(
@@ -162,43 +195,62 @@ async def get_all_users(
     return AdminUserListResponse(total_accounts=total_accounts, users=formatted_users)
 
 
+
 # 2. GET USER DETAILS & STATS
 @router.get("/users/{user_id}", response_model=AdminUserDetailResponse)
 async def get_user_details(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin)
+    _admin: User = Depends(get_current_admin)
 ):
     # Fetch User
     res = await db.execute(select(User).options(selectinload(User.profile)).filter(User.id == user_id))
     user = res.scalars().first()
-    if not user: raise HTTPException(status_code=404, detail="User not found")
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     # Fetch Progress Stats
     prog_res = await db.execute(select(UserProgress).filter(UserProgress.user_id == user_id))
     progress = prog_res.scalars().first()
-    streak = f"{progress.current_streak} days" if progress else "0 days"
+    c_streak = progress.current_streak if progress else 0
+    streak_str = f"{c_streak} day" if c_streak == 1 else f"{c_streak} days"
 
     # Fetch Lessons Completed
-    les_res = await db.execute(select(func.count(UserLessonProgress.id)).filter(UserLessonProgress.user_id == user_id, UserLessonProgress.status == "completed"))
+    les_res = await db.execute(
+        select(func.count(UserLessonProgress.id))
+        .filter(UserLessonProgress.user_id == user_id, UserLessonProgress.status == "completed")
+    )
     lessons_completed = les_res.scalar() or 0
 
+    # Fetch Lesson estimated minutes for completed lessons
+    les_time_res = await db.execute(
+        select(func.coalesce(func.sum(Lesson.estimated_minutes), 0))
+        .join(UserLessonProgress, UserLessonProgress.lesson_id == Lesson.id)
+        .filter(UserLessonProgress.user_id == user_id, UserLessonProgress.status == "completed")
+    )
+    lesson_time_minutes = les_time_res.scalar() or 0
+
     # Fetch Quiz Stats
-    quiz_res = await db.execute(select(QuizAttempt).filter(QuizAttempt.user_id == user_id, QuizAttempt.status == "completed"))
+    quiz_res = await db.execute(
+        select(QuizAttempt)
+        .options(selectinload(QuizAttempt.quiz_set).selectinload(QuizSet.questions))
+        .filter(QuizAttempt.user_id == user_id, QuizAttempt.status == "completed")
+    )
     quizzes = quiz_res.scalars().all()
     quizzes_completed = len(quizzes)
     
-    avg_score = 0
-    total_time_seconds = 0
-    if quizzes_completed > 0:
-        # Calculate percentage: (total correct / total questions asked) * 100
-        total_correct = sum(q.score for q in quizzes)
-        total_qs = sum(len(q.user_answers) for q in quizzes)
-        avg_score = int((total_correct / total_qs) * 100) if total_qs > 0 else 0
-        total_time_seconds = sum(q.duration_seconds for q in quizzes)
+    total_percentage_sum = 0
+    total_quiz_seconds = 0
+    for q in quizzes:
+        total_qs = len(q.quiz_set.questions) if (q.quiz_set and q.quiz_set.questions) else len(q.user_answers or {})
+        if total_qs > 0:
+            total_percentage_sum += int(((q.score or 0) / total_qs) * 100)
+        total_quiz_seconds += (q.duration_seconds or 0)
 
-    # Format Time (e.g. 34h 20m)
-    # Note: In production, add estimated lesson times to total_time_seconds
+    avg_score = int(total_percentage_sum / quizzes_completed) if quizzes_completed > 0 else 0
+
+    # Format Total Time (Lessons + Quizzes)
+    total_time_seconds = (lesson_time_minutes * 60) + total_quiz_seconds
     hours, remainder = divmod(total_time_seconds, 3600)
     minutes, _ = divmod(remainder, 60)
     time_str = f"{int(hours)}h {int(minutes)}m"
@@ -206,27 +258,32 @@ async def get_user_details(
     # Determine "Last Active" display
     last_active_str = "Today"
     if user.last_active_at:
-        diff = datetime.utcnow().date() - user.last_active_at.date()
-        if diff.days > 0:
-            last_active_str = f"{diff.days} days ago"
+        diff_days = (datetime.utcnow().date() - user.last_active_at.date()).days
+        if diff_days <= 0:
+            last_active_str = "Today"
+        elif diff_days == 1:
+            last_active_str = "1 day ago"
+        else:
+            last_active_str = f"{diff_days} days ago"
 
     return AdminUserDetailResponse(
         id=user.id,
         full_name=user.full_name,
         email=user.email,
         ai_level=user.profile.ai_level if user.profile else "N/A",
-        interest=user.profile.interests[0] if user.profile and user.profile.interests else "N/A",
+        interest=format_interests(user.profile),
         joined_date=user.created_at.strftime("%d %b %Y"),
         last_active=last_active_str,
         status="Suspended" if user.is_suspended else "Active",
         stats=AdminUserDetailStats(
-            learning_streak=streak,
+            learning_streak=streak_str,
             lessons_completed=lessons_completed,
             quizzes_completed=quizzes_completed,
             avg_quiz_score=f"{avg_score}%",
             total_learning_time=time_str
         )
     )
+
 
 # 3. ACTION: SUSPEND / UNSUSPEND USER
 @router.patch("/users/{user_id}/suspend", response_model=SuspendActionResponse)
@@ -321,29 +378,38 @@ async def reset_user_progress(
 async def delete_user(
     user_id: int, 
     db: AsyncSession = Depends(get_db), 
-    admin: User = Depends(get_current_admin)
+    _admin: User = Depends(get_current_admin)
 ):
     res = await db.execute(select(User).filter(User.id == user_id))
     user = res.scalars().first()
-    if not user: raise HTTPException(status_code=404)
-    if user.is_superuser: raise HTTPException(status_code=403, detail="Cannot delete an admin")
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot delete an admin account")
 
-    name = user.full_name # Save for the log
-    
-    # Delete child records safely first
+    name = user.full_name
+    email = user.email
+
+    # Delete all associated user records cleanly
     await db.execute(UserProfile.__table__.delete().where(UserProfile.user_id == user_id))
     await db.execute(UserProgress.__table__.delete().where(UserProgress.user_id == user_id))
     await db.execute(UserLessonProgress.__table__.delete().where(UserLessonProgress.user_id == user_id))
     await db.execute(QuizAttempt.__table__.delete().where(QuizAttempt.user_id == user_id))
-    await db.execute(OTP.__table__.delete().where(OTP.email == user.email))
-    
-    # Finally, delete user
+    await db.execute(DailyFeed.__table__.delete().where(DailyFeed.user_id == user_id))
+    await db.execute(DailySession.__table__.delete().where(DailySession.user_id == user_id))
+    await db.execute(UserNewsInteraction.__table__.delete().where(UserNewsInteraction.user_id == user_id))
+    await db.execute(WeeklyActivity.__table__.delete().where(WeeklyActivity.user_id == user_id))
+    await db.execute(Notification.__table__.delete().where(Notification.user_id == user_id))
+    await db.execute(OTP.__table__.delete().where(OTP.email == email))
+
+    # Finally, delete user account
     await db.delete(user)
-    
-    db.add(ActivityLog(action_type="USER_DELETED", description=f"{admin.full_name} permanently deleted {name}"))
+
+    db.add(ActivityLog(action_type="USER_DELETED", description=f"Permanently deleted user account for {name} ({email})"))
     await db.commit()
-    
+
     return {"message": "User account permanently deleted."}
+
 
 #  ADMIN PROFILE
 @router.get("/profile", response_model=AdminProfileResponse)
@@ -420,7 +486,7 @@ async def upload_admin_image(
 @router.get("/app-settings", response_model=AppSettingsSchema)
 async def get_app_settings(
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin)
+    _admin: User = Depends(get_current_admin)
 ):
     """Fetch global app configurations."""
     res = await db.execute(select(AppSettings).filter(AppSettings.id == 1))

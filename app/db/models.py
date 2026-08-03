@@ -16,6 +16,7 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     is_superuser = Column(Boolean, default=False)
+    role = Column(String, default="user")
     is_suspended = Column(Boolean, default=False) 
     last_active_at = Column(DateTime, default=datetime.datetime.utcnow) 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
