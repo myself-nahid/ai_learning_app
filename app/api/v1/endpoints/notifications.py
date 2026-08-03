@@ -1,17 +1,17 @@
+from datetime import datetime, timedelta
+from typing import List, Optional
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore [missing-import]
-from sqlalchemy import select
-# pyrefly: ignore [missing-import]
-from typing import List, Optional
-from datetime import datetime
+from sqlalchemy import select, delete, desc
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, Notification, NewsArticle
+from app.db.models import User, Notification, NewsArticle, ActivityLog
 from app.schemas.notification import NotificationSchema
 from app.core.config import settings
+
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -21,15 +21,63 @@ async def get_notifications(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = select(Notification).filter(Notification.user_id == current_user.id)
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+
+    # 1. AUTO-PURGE: Delete all notifications and activity logs older than 7 days
+    await db.execute(delete(Notification).filter(Notification.created_at < seven_days_ago))
+    await db.execute(delete(ActivityLog).filter(ActivityLog.created_at < seven_days_ago))
+    await db.commit()
+
+    # 2. ADMIN SYNC: If user is an Admin, convert recent system ActivityLogs into notifications
+    if current_user.is_superuser or current_user.role == "admin":
+        logs_res = await db.execute(
+            select(ActivityLog)
+            .filter(ActivityLog.created_at >= seven_days_ago)
+            .order_by(desc(ActivityLog.created_at))
+        )
+        logs = logs_res.scalars().all()
+
+        existing_res = await db.execute(
+            select(Notification).filter(
+                Notification.user_id == current_user.id,
+                Notification.created_at >= seven_days_ago
+            )
+        )
+        existing = {(n.title, n.message) for n in existing_res.scalars().all()}
+
+        new_notifs = []
+        for log in logs:
+            title = log.action_type.replace("_", " ").title()
+            message = log.description
+            if (title, message) not in existing:
+                new_notifs.append(
+                    Notification(
+                        user_id=current_user.id,
+                        title=title,
+                        message=message,
+                        type="system",
+                        is_read=False,
+                        created_at=log.created_at
+                    )
+                )
+        if new_notifs:
+            db.add_all(new_notifs)
+            await db.commit()
+
+    # 3. Query notifications for current user (from last 7 days)
+    query = select(Notification).filter(
+        Notification.user_id == current_user.id,
+        Notification.created_at >= seven_days_ago
+    )
     if is_read is not None:
         query = query.filter(Notification.is_read == is_read)
         
-    query = query.order_by(Notification.created_at.desc())
+    query = query.order_by(desc(Notification.created_at))
     res = await db.execute(query)
     notifications = res.scalars().all()
 
     return notifications
+
 
 
 @router.put("/{notification_id}/read")
