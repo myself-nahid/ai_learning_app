@@ -3,6 +3,7 @@ import logging
 import re
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 import httpx
 from app.core.config import settings
 
@@ -148,6 +149,7 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
     Stores the results directly in the database.
     """
     from datetime import datetime
+    # pyrefly: ignore [missing-import]
     from sqlalchemy import select
     from app.db.models import NewsArticle
     from app.services.ai_service import transform_news_to_todai_format
