@@ -50,12 +50,12 @@ async def complete_onboarding(
         primary_goal=data.primary_goal,
     )
     
-    # Ensure live news articles exist in DB (auto-generate via NewsAPI & OpenAI if empty or count < 10)
+    # Trigger background live news generation for selected interests without blocking onboarding completion HTTP response
     count_res = await db.execute(select(func.count(NewsArticle.id)))
     if (count_res.scalar() or 0) < 10:
-        from app.services.news_service import fetch_and_generate_live_news_for_user
-        await fetch_and_generate_live_news_for_user(db, data.interests)
-
+        import asyncio
+        from app.services.news_service import background_generate_news_task
+        asyncio.create_task(background_generate_news_task(data.interests))
 
     await db.commit()
     
@@ -80,11 +80,20 @@ async def complete_onboarding(
 
 # 1. GET PROFILE INFORMATION (Account Info UI)
 @router.get("/me", response_model=UserProfileResponse)
-async def get_my_profile(current_user: User = Depends(get_current_user)):
+async def get_my_profile(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     # If the user has an image, attach the base URL to it
     if current_user.profile_image:
         if not current_user.profile_image.startswith("http"):
             current_user.profile_image = f"{settings.BASE_URL.rstrip('/')}{current_user.profile_image}"
+
+    # Attach User XP & Badge Info
+    from app.services.xp_service import get_user_xp_info
+    xp_info = await get_user_xp_info(db, current_user.id)
+    for k, v in xp_info.items():
+        setattr(current_user, k, v)
             
     return current_user
 
@@ -98,6 +107,12 @@ async def update_name(
     current_user.full_name = data.full_name
     await db.commit()
     await db.refresh(current_user)
+    
+    from app.services.xp_service import get_user_xp_info
+    xp_info = await get_user_xp_info(db, current_user.id)
+    for k, v in xp_info.items():
+        setattr(current_user, k, v)
+        
     return current_user
 
 # 3. UPLOAD PROFILE IMAGE (Camera icon in UI)
@@ -252,8 +267,9 @@ async def update_preferences(
     )
     
     if data.interests and len(data.interests) > 0:
-        from app.services.news_service import fetch_and_generate_live_news_for_user
-        await fetch_and_generate_live_news_for_user(db, data.interests)
+        import asyncio
+        from app.services.news_service import background_generate_news_task
+        asyncio.create_task(background_generate_news_task(data.interests))
 
     return {
         "status": "success",

@@ -713,23 +713,42 @@ async def get_learn_dashboard(
         "days_active": days_active
     }
 
+    # Only use news from the last 3 days — keeps learning content fresh
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+
     news_res = await db.execute(
         select(NewsArticle)
+        .filter(NewsArticle.published_at >= three_days_ago)
         .order_by(NewsArticle.published_at.desc())
-        .limit(3)
+        .limit(10)
     )
     latest_news = news_res.scalars().all()
 
     # ── Ensure every news article has a real LearningPath + Lesson ──────────
     # This auto-creates DB rows if they don't exist yet, so we always get real IDs.
     news_path_contexts: List[Dict[str, Any]] = []
+    fresh_path_ids: set = set()
     for article in latest_news:
         ctx = await _ensure_news_learning_path(db, article)
         if ctx:
             news_path_contexts.append(ctx)
+            fresh_path_ids.add(ctx["path_id"])
 
-    # Fetch all Paths with lessons loaded (now includes the auto-created ones)
-    paths_res = await db.execute(select(LearningPath).options(selectinload(LearningPath.lessons)))
+    # Fetch only LearningPaths tied to fresh (≤3 day) news articles.
+    # This excludes stale paths from old news while keeping user progress intact.
+    if fresh_path_ids:
+        paths_res = await db.execute(
+            select(LearningPath)
+            .options(selectinload(LearningPath.lessons))
+            .filter(LearningPath.id.in_(fresh_path_ids))
+        )
+    else:
+        paths_res = await db.execute(
+            select(LearningPath)
+            .options(selectinload(LearningPath.lessons))
+            .order_by(LearningPath.id.desc())
+            .limit(20)
+        )
     paths = paths_res.scalars().all()
 
     # Get all user progress records at once
@@ -1142,6 +1161,10 @@ async def complete_lesson(
     # Update DailySession for /home/dashboard pulse task completion
     daily_session = await get_or_create_daily_session(db, current_user.id)
     daily_session.lesson_completed = True
+
+    # Award XP for lesson completion (+20 XP)
+    from app.services.xp_service import add_user_xp
+    await add_user_xp(db, current_user.id, 20)
 
     # Update WeeklyActivity
     today = datetime.utcnow().date()

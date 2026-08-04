@@ -1,4 +1,5 @@
-from pydantic import BaseModel, EmailStr, Field
+# pyrefly: ignore [missing-import]
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Union
 from datetime import time, datetime
 
@@ -42,6 +43,15 @@ class UserProfileResponse(BaseModel):
     push_notifications: bool
     daily_reminder_time: time
     member_since: datetime
+    
+    # XP & Badge System
+    current_xp: Optional[int] = 0
+    badge_name: Optional[str] = "AI Novice"
+    badge_level: Optional[str] = "Tier 1"
+    badge_icon: Optional[str] = "✨"
+    badge_color: Optional[str] = "#06B6D4"
+    next_badge_xp: Optional[int] = 100
+    progress_percentage: Optional[int] = 0
 
     class Config:
         from_attributes = True

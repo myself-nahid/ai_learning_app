@@ -143,9 +143,22 @@ async def fetch_raw_ai_news(query: str):
     return []
 
 
+async def background_generate_news_task(topics: list = None, max_articles: int = 15):
+    """
+    Background worker task to fetch and generate live news using a fresh AsyncSession.
+    Runs asynchronously without holding or blocking HTTP API requests.
+    """
+    from app.db.session import SessionLocal
+    try:
+        async with SessionLocal() as db:
+            await fetch_and_generate_live_news_for_user(db, topics=topics, max_articles=max_articles)
+    except Exception as e:
+        logger.error("Background news generation error: %s", str(e))
+
+
 async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_articles: int = 15):
     """
-    Fetches real live news articles from NewsAPI and uses OpenAI to rewrite them into TodAI format.
+    Fetches real live news articles from NewsAPI and uses OpenAI to rewrite them into TodAI format in parallel.
     Stores the results directly in the database.
     """
     from datetime import datetime
@@ -157,59 +170,75 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
     if not topics:
         topics = ["Generative AI", "Artificial Intelligence", "Machine Learning", "AI Tools", "Technology"]
 
-    created_articles = []
+    # 1. Fetch raw articles across topics and collect candidates
+    raw_candidates = []
+    seen_titles = set()
+
+    existing_res = await db.execute(select(NewsArticle.headline))
+    existing_headlines = set(existing_res.scalars().all())
+
     for topic in topics:
-        if len(created_articles) >= max_articles:
+        if len(raw_candidates) >= max_articles:
             break
 
         raw_articles = await fetch_raw_ai_news(topic)
         for raw in raw_articles:
-            if len(created_articles) >= max_articles:
+            if len(raw_candidates) >= max_articles:
                 break
             
             title = raw.get("title")
-            if not title or "[Removed]" in title:
+            if not title or "[Removed]" in title or title in seen_titles or title in existing_headlines:
                 continue
 
-            # Check duplicate in DB by headline or title
-            dup_check = await db.execute(select(NewsArticle).filter(NewsArticle.headline == title))
-            if dup_check.scalars().first():
-                continue
+            seen_titles.add(title)
+            raw_candidates.append((raw, topic))
 
-            try:
-                ai_news = await transform_news_to_todai_format(raw, topic)
-                content_blocks = ai_news.get("content_blocks")
-                if not isinstance(content_blocks, list):
-                    content_blocks = [
-                        {"type": "paragraph", "text": raw.get("description") or title},
-                        {"type": "takeaway", "items": ai_news.get("takeaways") or ai_news.get("points") or [title]},
-                        {"type": "quote", "text": raw.get("description") or title, "author": raw.get("source", {}).get("name") or "NewsAPI"}
-                    ]
+    if not raw_candidates:
+        return []
 
-                image_url = raw.get("urlToImage") or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+    # 2. Parallel transformation using asyncio.gather (fast concurrent OpenAI processing)
+    async def _process_single(raw_item):
+        raw, topic = raw_item
+        title = raw.get("title")
+        try:
+            ai_news = await transform_news_to_todai_format(raw, topic)
+            content_blocks = ai_news.get("content_blocks")
+            if not isinstance(content_blocks, list):
+                content_blocks = [
+                    {"type": "paragraph", "text": raw.get("description") or title},
+                    {"type": "takeaway", "items": ai_news.get("takeaways") or ai_news.get("points") or [title]},
+                    {"type": "quote", "text": raw.get("description") or title, "author": raw.get("source", {}).get("name") or "NewsAPI"}
+                ]
 
-                new_article = NewsArticle(
-                    headline=ai_news.get("headline") or title,
-                    summary=ai_news.get("summary") or raw.get("description") or title,
-                    tag=ai_news.get("tag") or topic,
-                    category=topic,
-                    content_blocks=content_blocks,
-                    image_url=image_url,
-                    publisher=raw.get("source", {}).get("name") or "NewsAPI",
-                    original_url=raw.get("url") or "https://newsapi.org",
-                    read_time_minutes=3,
-                    published_at=datetime.utcnow()
-                )
-                db.add(new_article)
-                await db.flush()
-                created_articles.append(new_article)
-            except Exception as e:
-                logger.error("Failed to transform live article '%s' via OpenAI: %s", title, str(e))
-                continue
+            image_url = raw.get("urlToImage") or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+
+            return NewsArticle(
+                headline=ai_news.get("headline") or title,
+                summary=ai_news.get("summary") or raw.get("description") or title,
+                tag=ai_news.get("tag") or topic,
+                category=topic,
+                content_blocks=content_blocks,
+                image_url=image_url,
+                publisher=raw.get("source", {}).get("name") or "NewsAPI",
+                original_url=raw.get("url") or "https://newsapi.org",
+                read_time_minutes=3,
+                published_at=datetime.utcnow()
+            )
+        except Exception as e:
+            logger.error("Failed to transform live article '%s' via OpenAI: %s", title, str(e))
+            return None
+
+    results = await asyncio.gather(*[_process_single(item) for item in raw_candidates], return_exceptions=True)
+
+    created_articles = []
+    for res in results:
+        if isinstance(res, NewsArticle):
+            db.add(res)
+            created_articles.append(res)
 
     if created_articles:
         await db.commit()
-        logger.info("Successfully created %d live AI news articles via NewsAPI & OpenAI!", len(created_articles))
+        logger.info("Successfully created %d live AI news articles via NewsAPI & OpenAI in parallel!", len(created_articles))
 
     return created_articles
 

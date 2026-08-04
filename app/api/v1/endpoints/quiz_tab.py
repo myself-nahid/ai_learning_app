@@ -375,8 +375,16 @@ async def get_quiz_dashboard(
         day_streak=streak_days
     )
 
-    news_res = await db.execute(select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(15))
+    # Only use news from the last 3 days — keeps quiz content fresh
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    news_res = await db.execute(
+        select(NewsArticle)
+        .filter(NewsArticle.published_at >= three_days_ago)
+        .order_by(NewsArticle.published_at.desc())
+        .limit(15)
+    )
     latest_news = news_res.scalars().all()
+
 
     # ── Ensure every news article has a real QuizSet + Questions ────────────
     news_quiz_contexts = []
@@ -716,6 +724,11 @@ async def submit_quiz(
     from app.services.session_service import get_or_create_daily_session
     daily_session = await get_or_create_daily_session(db, current_user.id)
     daily_session.quiz_completed = True
+
+    # Award XP for quiz completion (10 base + score * 5)
+    earned_xp = 10 + (score * 5)
+    from app.services.xp_service import add_user_xp
+    await add_user_xp(db, current_user.id, earned_xp)
     
     await db.commit()
 

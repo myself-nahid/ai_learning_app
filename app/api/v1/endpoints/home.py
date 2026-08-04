@@ -80,7 +80,7 @@ async def get_home_dashboard(
     )
     user_with_profile = user_res.scalars().first()
 
-    # Ensure live news articles exist for TODAY (auto-generate via NewsAPI & OpenAI if today's count < 10 or total < 20)
+    # Check if news count is low and trigger background news generation without blocking HTTP response
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     today_news_res = await db.execute(
         select(func.count(NewsArticle.id)).filter(NewsArticle.published_at >= today_start)
@@ -90,16 +90,19 @@ async def get_home_dashboard(
     total_count_res = await db.execute(select(func.count(NewsArticle.id)))
     total_news_count = total_count_res.scalar() or 0
 
-    if today_news_count < 10 or total_news_count < 20:
+    if today_news_count < 5 or total_news_count < 10:
         try:
-            from app.services.news_service import fetch_and_generate_live_news_for_user
+            from app.services.news_service import background_generate_news_task
             user_interests = user_with_profile.profile.interests if (user_with_profile and user_with_profile.profile and user_with_profile.profile.interests) else ["Generative AI", "AI Tools", "Technology"]
-            await fetch_and_generate_live_news_for_user(db, user_interests, max_articles=20)
+            import asyncio
+            asyncio.create_task(background_generate_news_task(user_interests, max_articles=15))
         except Exception as e:
-            logger.warning("Failed to auto-fetch live news for today: %s", str(e))
+            logger.warning("Failed to schedule background live news generation: %s", str(e))
 
 
-    query = select(NewsArticle).order_by(desc(NewsArticle.published_at))
+    from datetime import timedelta
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    query = select(NewsArticle).filter(NewsArticle.published_at >= three_days_ago).order_by(desc(NewsArticle.published_at))
 
     # Apply Filtering Logic per Tab
     if category_tab == "For You":
@@ -171,9 +174,14 @@ async def get_home_dashboard(
     news_result = await db.execute(query)
     articles = news_result.scalars().all()
 
-    # Fallback: If tab filter yields fewer than 10 articles, return top 20 latest articles so feed is never empty or thin
+    # Fallback: If tab filter yields fewer than 10 articles, return latest articles from last 3 days
     if not articles or len(articles) < 10:
-        fallback_res = await db.execute(select(NewsArticle).order_by(desc(NewsArticle.published_at)).limit(20))
+        fallback_res = await db.execute(
+            select(NewsArticle)
+            .filter(NewsArticle.published_at >= three_days_ago)
+            .order_by(desc(NewsArticle.published_at))
+            .limit(20)
+        )
         fallback_articles = fallback_res.scalars().all()
         seen_ids = {a.id for a in articles}
         combined_articles = list(articles)
