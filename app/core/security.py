@@ -10,8 +10,8 @@ from app.core.config import settings
 # Configuration
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 5256000  # 10 years (3650 days) for persistent mobile session
+REFRESH_TOKEN_EXPIRE_DAYS = 3650  # 10 years (3650 days)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
