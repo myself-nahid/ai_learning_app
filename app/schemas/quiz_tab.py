@@ -75,4 +75,5 @@ class QuizResultResponse(BaseModel):
     total_questions: int
     focus_percentage: int
     duration_formatted: str # e.g., "8:24"
+    earned_xp: int = 0
     review: List[ReviewItemSchema]

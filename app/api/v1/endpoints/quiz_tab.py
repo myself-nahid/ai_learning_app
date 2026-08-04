@@ -563,6 +563,13 @@ async def get_quiz_questions(
     )
     q_set = qset_res.scalars().first()
     if not q_set:
+        fallback_res = await db.execute(
+            select(QuizSet)
+            .options(selectinload(QuizSet.questions))
+            .order_by(QuizSet.id.desc())
+        )
+        q_set = fallback_res.scalars().first()
+    if not q_set:
         raise HTTPException(status_code=404, detail="Quiz Set not found")
 
     questions = [
@@ -590,9 +597,7 @@ async def start_quiz(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # All quiz_set_ids are now real DB IDs — no need for the quiz_set_id=0 special case
-
-    # 1. Fetch Quiz Set with questions
+    # 1. Fetch Quiz Set with questions (with fallback to latest available set if ID not found)
     qset_res = await db.execute(
         select(QuizSet)
         .options(selectinload(QuizSet.questions))
@@ -601,6 +606,14 @@ async def start_quiz(
     q_set = qset_res.scalars().first()
     
     if not q_set: 
+        fallback_res = await db.execute(
+            select(QuizSet)
+            .options(selectinload(QuizSet.questions))
+            .order_by(QuizSet.id.desc())
+        )
+        q_set = fallback_res.scalars().first()
+
+    if not q_set:
         raise HTTPException(status_code=404, detail="Quiz Set not found")
 
     quiz_title = q_set.title
@@ -618,7 +631,7 @@ async def start_quiz(
     old_attempts_res = await db.execute(
         select(QuizAttempt).filter(
             QuizAttempt.user_id == current_user.id,
-            QuizAttempt.quiz_set_id == quiz_set_id,
+            QuizAttempt.quiz_set_id == q_set.id,
             QuizAttempt.status == "in_progress"
         )
     )
@@ -626,7 +639,7 @@ async def start_quiz(
         old_att.status = "abandoned"
 
     # 2. Create a NEW attempt (Allows Retaking)
-    attempt = QuizAttempt(user_id=current_user.id, quiz_set_id=quiz_set_id)
+    attempt = QuizAttempt(user_id=current_user.id, quiz_set_id=q_set.id)
     db.add(attempt)
     
     # 3. Commit to database
@@ -727,10 +740,25 @@ async def submit_quiz(
     daily_session = await get_or_create_daily_session(db, current_user.id)
     daily_session.quiz_completed = True
 
-    # Award XP for quiz completion (10 base + score * 5)
-    earned_xp = 10 + (score * 5)
-    from app.services.xp_service import add_user_xp
-    await add_user_xp(db, current_user.id, earned_xp)
+    # Check if quiz was already completed previously by this user
+    prev_completed_res = await db.execute(
+        select(QuizAttempt).filter(
+            QuizAttempt.user_id == current_user.id,
+            QuizAttempt.quiz_set_id == attempt.quiz_set_id,
+            QuizAttempt.status == "completed",
+            QuizAttempt.id != attempt.id
+        )
+    )
+    was_already_completed = len(prev_completed_res.scalars().all()) > 0
+
+    # Dynamic XP: 1st completion = min(20, 5 + score*3), Retake = 0 XP (no duplicate XP farming)
+    if was_already_completed:
+        earned_xp = 0
+    else:
+        earned_xp = min(20, max(5, 5 + (score * 3)))
+        if earned_xp > 0:
+            from app.services.xp_service import add_user_xp
+            await add_user_xp(db, current_user.id, earned_xp)
     
     await db.commit()
 
@@ -744,6 +772,7 @@ async def submit_quiz(
         total_questions=len(questions_map),
         focus_percentage=data.focus_percentage,
         duration_formatted=duration_str,
+        earned_xp=earned_xp,
         review=review_items
     )
 

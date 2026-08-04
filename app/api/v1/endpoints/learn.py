@@ -1107,6 +1107,7 @@ async def complete_lesson(
         )
     )
     progs = prog_res.scalars().all()
+    was_already_completed = any(p.status == "completed" for p in progs) if progs else False
     if progs:
         for p in progs:
             p.status = "completed"
@@ -1162,9 +1163,14 @@ async def complete_lesson(
     daily_session = await get_or_create_daily_session(db, current_user.id)
     daily_session.lesson_completed = True
 
-    # Award XP for lesson completion (+20 XP)
-    from app.services.xp_service import add_user_xp
-    await add_user_xp(db, current_user.id, 20)
+    # Dynamic XP: First time = min(20, 10 + cards*2), Retake = 0 XP (no duplicate XP farming)
+    if was_already_completed:
+        earned_xp = 0
+    else:
+        cards_cnt = payload.completed_cards or 4
+        earned_xp = min(20, max(10, 10 + (cards_cnt * 2)))
+        from app.services.xp_service import add_user_xp
+        await add_user_xp(db, current_user.id, earned_xp)
 
     # Update WeeklyActivity
     today = datetime.utcnow().date()
@@ -1185,8 +1191,9 @@ async def complete_lesson(
         days_active = dict(wa.days_active or {})
         days_active[today_key] = True
         wa.days_active = days_active
-        wa.total_lessons_this_week = (wa.total_lessons_this_week or 0) + 1
-        wa.total_minutes_this_week = (wa.total_minutes_this_week or 0) + (current_lesson.estimated_minutes if current_lesson else 5)
+        if not was_already_completed:
+            wa.total_lessons_this_week = (wa.total_lessons_this_week or 0) + 1
+            wa.total_minutes_this_week = (wa.total_minutes_this_week or 0) + (current_lesson.estimated_minutes if current_lesson else 5)
     else:
         days_active = {"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False}
         days_active[today_key] = True
@@ -1202,7 +1209,7 @@ async def complete_lesson(
     await db.commit()
     return {
         "message": "Lesson completed successfully!",
+        "earned_xp": earned_xp,
         "streak_updated": True,
         "pulse_updated": True,
     }
-
