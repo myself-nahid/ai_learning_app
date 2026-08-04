@@ -1,4 +1,6 @@
 # pyrefly: ignore [missing-import]
+from datetime import timedelta
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -342,6 +344,7 @@ async def get_quiz_dashboard(
     all_attempts = attempts_res.scalars().all()
 
     completed_attempts = [a for a in all_attempts if a.status == "completed"]
+    distinct_completed_set_ids = {a.quiz_set_id for a in completed_attempts}
     total_correct = sum(a.score or 0 for a in completed_attempts)
     total_answered = sum(len(a.user_answers or {}) for a in completed_attempts)
 
@@ -370,7 +373,7 @@ async def get_quiz_dashboard(
                 break
 
     stats = QuizProgressStats(
-        completed_count=len(completed_attempts),
+        completed_count=len(distinct_completed_set_ids),
         accuracy_percentage=accuracy,
         day_streak=streak_days
     )
@@ -381,7 +384,7 @@ async def get_quiz_dashboard(
         select(NewsArticle)
         .filter(NewsArticle.published_at >= three_days_ago)
         .order_by(NewsArticle.published_at.desc())
-        .limit(15)
+        .limit(10)
     )
     latest_news = news_res.scalars().all()
 
@@ -724,6 +727,36 @@ async def submit_quiz(
     from app.services.session_service import get_or_create_daily_session
     daily_session = await get_or_create_daily_session(db, current_user.id)
     daily_session.quiz_completed = True
+
+    # Update WeeklyActivity for today so day_streak updates
+    today = datetime.utcnow().date()
+    week_start = today - timedelta(days=today.weekday())
+    week_start_dt = datetime(week_start.year, week_start.month, week_start.day)
+    day_keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    today_key = day_keys[today.weekday()]
+
+    from app.db.models import WeeklyActivity
+    wa_res = await db.execute(
+        select(WeeklyActivity).filter(
+            WeeklyActivity.user_id == current_user.id,
+            WeeklyActivity.week_start_date >= week_start_dt
+        )
+    )
+    wa = wa_res.scalars().first()
+    if not wa:
+        wa = WeeklyActivity(
+            user_id=current_user.id,
+            week_start_date=week_start_dt,
+            days_active={"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False},
+            total_lessons_this_week=0,
+            total_minutes_this_week=0,
+        )
+        db.add(wa)
+        await db.flush()
+
+    days_active = dict(wa.days_active or {})
+    days_active[today_key] = True
+    wa.days_active = days_active
 
     # Award XP for quiz completion (10 base + score * 5)
     earned_xp = 10 + (score * 5)

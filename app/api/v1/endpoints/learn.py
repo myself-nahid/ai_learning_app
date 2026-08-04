@@ -1205,4 +1205,4 @@ async def complete_lesson(
         "streak_updated": True,
         "pulse_updated": True,
     }
-
+
