@@ -50,7 +50,7 @@ class UserProfileResponse(BaseModel):
     badge_level: Optional[str] = "Tier 1"
     badge_icon: Optional[str] = "✨"
     badge_color: Optional[str] = "#06B6D4"
-    next_badge_xp: Optional[int] = 100
+    next_badge_xp: Optional[int] = 500
     progress_percentage: Optional[int] = 0
 
     class Config:

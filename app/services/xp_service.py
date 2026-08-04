@@ -17,7 +17,7 @@ BADGES_TIERS = [
         "min_xp": 0,
         "icon": "✨",
         "color": "#06B6D4",  # Cyan
-        "next_xp": 499,
+        "next_xp": 500,
     },
     {
         "name": "AI Explorer",
@@ -25,7 +25,7 @@ BADGES_TIERS = [
         "min_xp": 500,
         "icon": "⚡",
         "color": "#3B82F6",  # Blue
-        "next_xp": 999,
+        "next_xp": 1000,
     },
     {
         "name": "AI Practitioner",
@@ -33,7 +33,7 @@ BADGES_TIERS = [
         "min_xp": 1000,
         "icon": "🥇",
         "color": "#8B5CF6",  # Purple
-        "next_xp": 1999,
+        "next_xp": 2000,
     },
     {
         "name": "AI Scholar",
@@ -41,7 +41,7 @@ BADGES_TIERS = [
         "min_xp": 2000,
         "icon": "🎓",
         "color": "#EC4899",  # Pink
-        "next_xp": 4999,
+        "next_xp": 5000,
     },
     {
         "name": "AI Innovator",
@@ -49,7 +49,7 @@ BADGES_TIERS = [
         "min_xp": 5000,
         "icon": "👑",
         "color": "#F59E0B",  # Gold
-        "next_xp": 9999,
+        "next_xp": 10000,
     },
     {
         "name": "AI Mastermind",

@@ -5,9 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore [missing-import]
-from sqlalchemy import select
-# pyrefly: ignore [missing-import]
-from sqlalchemy import distinct
+from sqlalchemy import select, func, distinct
 # pyrefly: ignore [missing-import]
 from sqlalchemy.orm import selectinload
 from datetime import datetime
@@ -350,27 +348,28 @@ async def get_quiz_dashboard(
 
     accuracy = int((total_correct / total_answered) * 100) if total_answered > 0 else 0
 
-    # Fetch day streak dynamically from WeeklyActivity
-    from app.db.models import WeeklyActivity
-    from datetime import timedelta
+    # Calculate quiz day streak dynamically from QuizAttempt completion dates
+    from datetime import date, timedelta
     today = datetime.utcnow().date()
-    week_start = today - timedelta(days=today.weekday())
-    wa_res = await db.execute(
-        select(WeeklyActivity).filter(
-            WeeklyActivity.user_id == current_user.id,
-            WeeklyActivity.week_start_date >= datetime(week_start.year, week_start.month, week_start.day)
+    completed_dates_res = await db.execute(
+        select(func.date(QuizAttempt.completed_at))
+        .filter(
+            QuizAttempt.user_id == current_user.id,
+            QuizAttempt.status == "completed",
+            QuizAttempt.completed_at.isnot(None)
         )
+        .distinct()
     )
-    wa = wa_res.scalars().first()
-    day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    completed_dates = {d[0] for d in completed_dates_res.all() if d[0] is not None}
+
     streak_days = 0
-    if wa and wa.days_active:
-        today_idx = today.weekday()
-        for i in range(today_idx, -1, -1):
-            if wa.days_active.get(day_order[i], False):
-                streak_days += 1
-            else:
-                break
+    check_date = today
+    if check_date not in completed_dates:
+        check_date = today - timedelta(days=1)
+
+    while check_date in completed_dates:
+        streak_days += 1
+        check_date -= timedelta(days=1)
 
     stats = QuizProgressStats(
         completed_count=len(distinct_completed_set_ids),
@@ -727,36 +726,6 @@ async def submit_quiz(
     from app.services.session_service import get_or_create_daily_session
     daily_session = await get_or_create_daily_session(db, current_user.id)
     daily_session.quiz_completed = True
-
-    # Update WeeklyActivity for today so day_streak updates
-    today = datetime.utcnow().date()
-    week_start = today - timedelta(days=today.weekday())
-    week_start_dt = datetime(week_start.year, week_start.month, week_start.day)
-    day_keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-    today_key = day_keys[today.weekday()]
-
-    from app.db.models import WeeklyActivity
-    wa_res = await db.execute(
-        select(WeeklyActivity).filter(
-            WeeklyActivity.user_id == current_user.id,
-            WeeklyActivity.week_start_date >= week_start_dt
-        )
-    )
-    wa = wa_res.scalars().first()
-    if not wa:
-        wa = WeeklyActivity(
-            user_id=current_user.id,
-            week_start_date=week_start_dt,
-            days_active={"mon": False, "tue": False, "wed": False, "thu": False, "fri": False, "sat": False, "sun": False},
-            total_lessons_this_week=0,
-            total_minutes_this_week=0,
-        )
-        db.add(wa)
-        await db.flush()
-
-    days_active = dict(wa.days_active or {})
-    days_active[today_key] = True
-    wa.days_active = days_active
 
     # Award XP for quiz completion (10 base + score * 5)
     earned_xp = 10 + (score * 5)

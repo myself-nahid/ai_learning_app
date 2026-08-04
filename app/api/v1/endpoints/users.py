@@ -143,13 +143,18 @@ async def update_settings(
     current_user: User = Depends(get_current_user)
 ):
     # Use the service layer
-    return await update_user_settings(
+    updated_user = await update_user_settings(
         db=db,
         user=current_user,
         push_notifications=data.push_notifications,
         daily_reminder_time=data.daily_reminder_time,
         fcm_token=data.fcm_token,
     )
+    from app.services.xp_service import get_user_xp_info
+    xp_info = await get_user_xp_info(db, updated_user.id)
+    for k, v in xp_info.items():
+        setattr(updated_user, k, v)
+    return updated_user
 
 # PUBLIC: REGISTER PUSH TOKEN WITHOUT LOGIN
 @router.post("/register-push-token")
