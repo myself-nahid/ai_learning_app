@@ -13,9 +13,12 @@ from sqlalchemy import select, func, desc
 
 from app.core.config import settings 
 from app.api.deps import get_db, get_current_user
-from app.db.models import AppSettings, User, UserProfile
+from app.db.models import (
+    AppSettings, User, UserProfile, UserProgress, UserLessonProgress,
+    QuizAttempt, DailyFeed, DailySession, NewsArticle, UserNewsInteraction,
+    WeeklyActivity, Notification, OTP, ActivityLog
+)
 from app.schemas.user import ChangePasswordRequest, UpdateNameRequest, UpdateSettingsRequest, UserOnboarding, UserProfileResponse, RegisterPushTokenRequest
-from app.db.models import NewsArticle, UserNewsInteraction, UserProfile
 from app.schemas.home import NewsCardSchema 
 from app.schemas.user import UpdatePreferencesRequest
 from app.schemas.response import (
@@ -313,3 +316,39 @@ async def register_device(
     current_user.timezone = data.timezone
     await db.commit()
     return {"message": "Device successfully registered for push notifications"}
+
+
+# 6. DELETE MY ACCOUNT (User Account Deletion UI / iOS App Store Requirement)
+@router.delete("/me", response_model=MessageResponse)
+async def delete_my_account(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Permanently deletes the currently logged-in user account and all associated data.
+    Satisfies Apple App Store Guideline 5.1.1(v) for in-app account deletion.
+    """
+    user_id = current_user.id
+    name = current_user.full_name or "User"
+    email = current_user.email or ""
+
+    # Delete all associated user records cleanly
+    await db.execute(UserProfile.__table__.delete().where(UserProfile.user_id == user_id))
+    await db.execute(UserProgress.__table__.delete().where(UserProgress.user_id == user_id))
+    await db.execute(UserLessonProgress.__table__.delete().where(UserLessonProgress.user_id == user_id))
+    await db.execute(QuizAttempt.__table__.delete().where(QuizAttempt.user_id == user_id))
+    await db.execute(DailyFeed.__table__.delete().where(DailyFeed.user_id == user_id))
+    await db.execute(DailySession.__table__.delete().where(DailySession.user_id == user_id))
+    await db.execute(UserNewsInteraction.__table__.delete().where(UserNewsInteraction.user_id == user_id))
+    await db.execute(WeeklyActivity.__table__.delete().where(WeeklyActivity.user_id == user_id))
+    await db.execute(Notification.__table__.delete().where(Notification.user_id == user_id))
+    if email:
+        await db.execute(OTP.__table__.delete().where(OTP.email == email))
+
+    # Finally, delete user account
+    await db.delete(current_user)
+
+    db.add(ActivityLog(action_type="USER_DELETED_SELF", description=f"User deleted own account for {name} ({email})"))
+    await db.commit()
+
+    return {"message": "Your account and all associated data have been permanently deleted."}
