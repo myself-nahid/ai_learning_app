@@ -1,12 +1,12 @@
+version: "3.8"
+
 services:
   db:
     image: postgres:15-alpine
     container_name: ai_postgres_db
     restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: aishowcase
+    env_file:
+      - .env  # <--- FIX: This tells DB to use the exact same password as your web/worker!
     ports:
       - "5434:5432"
     volumes:
@@ -15,6 +15,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ai_redis
+    restart: always
     ports:
       - "6379:6379"
 
@@ -28,24 +29,26 @@ services:
       - .:/app
       - ./uploads:/app/uploads 
     env_file:
-      - .env  # <--- Automatically pulls all variables from your .env file
+      - .env
     environment:
+      # These override .env just for docker internal networking
       - POSTGRES_HOST=db  
       - POSTGRES_PORT=5432
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - db
       - redis
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   worker:
     build: .
     container_name: ai_celery_worker
+    restart: always
     volumes:
       - .:/app
       - ./uploads:/app/uploads 
     env_file:
-      - .env  # <--- CRITICAL: This allows the worker to see your REAL OpenAI Key
+      - .env
     environment:
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
@@ -58,6 +61,7 @@ services:
   beat:
     build: .
     container_name: ai_celery_beat
+    restart: always
     volumes:
       - .:/app
     env_file:
