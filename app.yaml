@@ -1,0 +1,34 @@
+# DigitalOcean App Platform spec (example)
+# Use with: `doctl apps create --spec app.yaml` after replacing placeholders
+
+name: ai-learning-backend
+region: nyc
+services:
+  - name: web
+    run_command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    http_port: 8000
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_AND_BUILD
+      - key: REDIS_URL
+        scope: RUN_AND_BUILD
+      - key: NEWS_API_KEY
+        scope: RUN_AND_BUILD
+      - key: OPENAI_API_KEY
+        scope: RUN_AND_BUILD
+  - name: worker
+    run_command: celery -A app.worker.celery_app worker --loglevel=info
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_AND_BUILD
+      - key: REDIS_URL
+        scope: RUN_AND_BUILD
+
+jobs: []
+
+# Note: For managed databases and redis, create them separately (doctl or DO console)
+# then populate the DATABASE_URL and REDIS_URL env vars above.

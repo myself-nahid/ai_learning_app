@@ -17,5 +17,6 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Start Uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Start Uvicorn (production)
+# Use multiple workers and no reload in production
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
