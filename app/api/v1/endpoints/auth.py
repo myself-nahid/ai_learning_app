@@ -42,6 +42,11 @@ async def signup(
         existing_user.full_name = user_in.full_name
         existing_user.hashed_password = get_password_hash(user_in.password)
         target_user = existing_user
+        log = ActivityLog(
+            user_id=target_user.id,
+            action_type="REGISTER",
+            description=f"{user_in.full_name} updated signup information"
+        )
     else:
         # Create new user with full_name
         target_user = User(
@@ -51,10 +56,13 @@ async def signup(
             is_verified=False
         )
         db.add(target_user)
+        await db.flush()
         log = ActivityLog(
-        action_type="REGISTER", 
-        description=f"{user_in.full_name} registered"
-    )
+            user_id=target_user.id,
+            action_type="REGISTER", 
+            description=f"{user_in.full_name} registered"
+        )
+
     db.add(log)
     
     await db.commit()
