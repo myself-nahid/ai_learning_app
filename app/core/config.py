@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     MAIL_PORT: int
     MAIL_SERVER: str
     MAIL_FROM_NAME: str
+    MAIL_USE_TLS: bool = True
+    MAIL_USE_SSL: bool = False
+    EMAIL_BACKEND: str = "smtp"
 
     # OpenAI API Key
     OPENAI_API_KEY: str 

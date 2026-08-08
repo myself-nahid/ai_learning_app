@@ -18,8 +18,8 @@ conf = ConnectionConfig(
     MAIL_PORT=settings.MAIL_PORT,
     MAIL_SERVER=settings.MAIL_SERVER,
     MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
+    MAIL_STARTTLS=settings.MAIL_USE_TLS,
+    MAIL_SSL_TLS=settings.MAIL_USE_SSL,
     USE_CREDENTIALS=True,
     VALIDATE_CERTS=True
 )
@@ -61,8 +61,25 @@ async def send_otp_email(email: str, otp_code: str, purpose: str):
         subtype=MessageType.html
     )
 
+    if settings.EMAIL_BACKEND == "console":
+        logger.info(
+            "[EMAIL BACKEND=console] OTP for %s: %s | subject=%s",
+            email,
+            otp_code,
+            message.subject,
+        )
+        return
+
     fm = FastMail(conf)
     try:
         await fm.send_message(message)
     except Exception as e:
-        logger.error("Failed to send email to %s: %s", email, str(e), exc_info=True)
+        logger.error(
+            "Failed to send email to %s using %s at %s:%s: %s",
+            email,
+            settings.EMAIL_BACKEND,
+            settings.MAIL_SERVER,
+            settings.MAIL_PORT,
+            str(e),
+            exc_info=True,
+        )
