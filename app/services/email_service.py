@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 import random
 
+import httpx
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,8 @@ conf = ConnectionConfig(
     USE_CREDENTIALS=True,
     VALIDATE_CERTS=True
 )
+
+SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/mail/send"
 
 async def generate_and_save_otp(db: AsyncSession, email: str, purpose: str) -> str:
     otp_code = str(random.randint(100000, 999999))
@@ -68,6 +71,54 @@ async def send_otp_email(email: str, otp_code: str, purpose: str):
             otp_code,
             message.subject,
         )
+        return
+
+    if settings.EMAIL_BACKEND == "sendgrid_http":
+        if not settings.SENDGRID_API_KEY:
+            logger.error("SENDGRID_API_KEY is not configured for sendgrid_http backend")
+            return
+
+        payload = {
+            "personalizations": [
+                {
+                    "to": [{"email": email}],
+                    "subject": message.subject,
+                }
+            ],
+            "from": {
+                "email": settings.MAIL_FROM,
+                "name": settings.MAIL_FROM_NAME or settings.MAIL_FROM,
+            },
+            "content": [
+                {"type": "text/html", "value": html}
+            ]
+        }
+
+        headers = {
+            "Authorization": f"Bearer {settings.SENDGRID_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(SENDGRID_ENDPOINT, json=payload, headers=headers)
+                response.raise_for_status()
+            logger.info("Sent OTP email to %s via SendGrid HTTP", email)
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "SendGrid HTTP error %s while sending email to %s: %s",
+                exc.response.status_code,
+                email,
+                exc.response.text,
+                exc_info=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to send email to %s via SendGrid HTTP: %s",
+                email,
+                str(exc),
+                exc_info=True,
+            )
         return
 
     fm = FastMail(conf)

@@ -18,6 +18,26 @@ services:
         scope: RUN_AND_BUILD
       - key: OPENAI_API_KEY
         scope: RUN_AND_BUILD
+      - key: MAIL_USERNAME
+        scope: RUN_AND_BUILD
+      - key: MAIL_PASSWORD
+        scope: RUN_AND_BUILD
+      - key: MAIL_FROM
+        scope: RUN_AND_BUILD
+      - key: MAIL_PORT
+        scope: RUN_AND_BUILD
+      - key: MAIL_SERVER
+        scope: RUN_AND_BUILD
+      - key: MAIL_FROM_NAME
+        scope: RUN_AND_BUILD
+      - key: MAIL_USE_TLS
+        scope: RUN_AND_BUILD
+      - key: MAIL_USE_SSL
+        scope: RUN_AND_BUILD
+      - key: EMAIL_BACKEND
+        scope: RUN_AND_BUILD
+      - key: SENDGRID_API_KEY
+        scope: RUN_AND_BUILD
   - name: worker
     run_command: celery -A app.worker.celery_app worker --loglevel=info
     instance_size_slug: basic-xxs
@@ -26,6 +46,26 @@ services:
       - key: DATABASE_URL
         scope: RUN_AND_BUILD
       - key: REDIS_URL
+        scope: RUN_AND_BUILD
+      - key: MAIL_USERNAME
+        scope: RUN_AND_BUILD
+      - key: MAIL_PASSWORD
+        scope: RUN_AND_BUILD
+      - key: MAIL_FROM
+        scope: RUN_AND_BUILD
+      - key: MAIL_PORT
+        scope: RUN_AND_BUILD
+      - key: MAIL_SERVER
+        scope: RUN_AND_BUILD
+      - key: MAIL_FROM_NAME
+        scope: RUN_AND_BUILD
+      - key: MAIL_USE_TLS
+        scope: RUN_AND_BUILD
+      - key: MAIL_USE_SSL
+        scope: RUN_AND_BUILD
+      - key: EMAIL_BACKEND
+        scope: RUN_AND_BUILD
+      - key: SENDGRID_API_KEY
         scope: RUN_AND_BUILD
 
 jobs: []

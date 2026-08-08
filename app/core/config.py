@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     MAIL_USE_TLS: bool = True
     MAIL_USE_SSL: bool = False
     EMAIL_BACKEND: str = "smtp"
+    SENDGRID_API_KEY: str | None = None
 
     # OpenAI API Key
     OPENAI_API_KEY: str 
