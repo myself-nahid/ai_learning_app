@@ -112,18 +112,25 @@ async def fetch_raw_ai_news(query: str):
                     articles = data["articles"]
                     relevant_articles = [
                         article for article in articles
-                        if article.get("title") and "[Removed]" not in article.get("title")
+                        if article.get("title")
+                        and "[Removed]" not in article.get("title")
+                        and _is_relevant_ai_article(article, query)
                     ]
                     if relevant_articles:
                         logger.info("Fetched %d live news articles from NewsAPI for '%s'", len(relevant_articles), query)
                         return relevant_articles
 
-                # Fallback to broader query if primary returned 0 articles
+                # Fallback to broader query if primary returned 0 relevant articles
                 params["q"] = "artificial intelligence OR OpenAI OR ChatGPT OR LLM"
                 response = await client.get(url, params=params, timeout=15.0)
                 data = response.json()
                 if data.get("status") == "ok" and data.get("articles"):
-                    articles = [a for a in data["articles"] if a.get("title") and "[Removed]" not in a.get("title")]
+                    articles = [
+                        a for a in data["articles"]
+                        if a.get("title")
+                        and "[Removed]" not in a.get("title")
+                        and _is_relevant_ai_article(a, params["q"])
+                    ]
                     return articles
                 return []
         except httpx.TimeoutException as e:
