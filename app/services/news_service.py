@@ -212,6 +212,15 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
 
             image_url = raw.get("urlToImage") or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
 
+            published_at_str = raw.get("publishedAt")
+            published_at_value = None
+            if published_at_str:
+                try:
+                    # NewsAPI returns ISO8601 timestamps like 2026-08-11T07:00:00Z
+                    published_at_value = datetime.fromisoformat(published_at_str.replace("Z", "+00:00"))
+                except Exception:
+                    published_at_value = None
+
             return NewsArticle(
                 headline=ai_news.get("headline") or title,
                 summary=ai_news.get("summary") or raw.get("description") or title,
@@ -222,7 +231,7 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
                 publisher=raw.get("source", {}).get("name") or "NewsAPI",
                 original_url=raw.get("url") or "https://newsapi.org",
                 read_time_minutes=3,
-                published_at=datetime.utcnow()
+                published_at=published_at_value or datetime.utcnow()
             )
         except Exception as e:
             logger.error("Failed to transform live article '%s' via OpenAI: %s", title, str(e))
