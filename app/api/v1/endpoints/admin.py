@@ -210,24 +210,26 @@ async def get_user_details(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Calculate the current streak from completed daily briefings so the admin
-    # view reflects the actual briefing history even if UserProgress is stale.
-    completed_dates_res = await db.execute(
-        select(func.date(DailySession.date))
-        .filter(
-            DailySession.user_id == user_id,
-            DailySession.is_fully_completed == True
-        )
-        .distinct()
-        .order_by(desc(func.date(DailySession.date)))
-    )
-    completed_dates = {row[0] for row in completed_dates_res.all()}
     today = datetime.utcnow().date()
-    streak_start = today if today in completed_dates else today - timedelta(days=1)
+    week_start = today - timedelta(days=today.weekday())
+    weekly_res = await db.execute(
+        select(WeeklyActivity)
+        .filter(
+            WeeklyActivity.user_id == user_id,
+            WeeklyActivity.week_start_date >= datetime(
+                week_start.year, week_start.month, week_start.day
+            )
+        )
+        .order_by(WeeklyActivity.week_start_date.desc())
+    )
+    weekly_activity = weekly_res.scalars().first()
+    days_active = weekly_activity.days_active if weekly_activity else {}
+    day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    streak_start = today.weekday()
     c_streak = 0
-    while streak_start in completed_dates:
+    while streak_start >= 0 and days_active.get(day_order[streak_start], False):
         c_streak += 1
-        streak_start -= timedelta(days=1)
+        streak_start -= 1
 
     streak_str = f"{c_streak} day" if c_streak == 1 else f"{c_streak} days"
 
