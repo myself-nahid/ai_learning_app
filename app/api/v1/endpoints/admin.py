@@ -210,10 +210,25 @@ async def get_user_details(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Fetch Progress Stats
-    prog_res = await db.execute(select(UserProgress).filter(UserProgress.user_id == user_id))
-    progress = prog_res.scalars().first()
-    c_streak = progress.current_streak if progress else 0
+    # Calculate the current streak from completed daily briefings so the admin
+    # view reflects the actual briefing history even if UserProgress is stale.
+    completed_dates_res = await db.execute(
+        select(func.date(DailySession.date))
+        .filter(
+            DailySession.user_id == user_id,
+            DailySession.is_fully_completed == True
+        )
+        .distinct()
+        .order_by(desc(func.date(DailySession.date)))
+    )
+    completed_dates = {row[0] for row in completed_dates_res.all()}
+    today = datetime.utcnow().date()
+    streak_start = today if today in completed_dates else today - timedelta(days=1)
+    c_streak = 0
+    while streak_start in completed_dates:
+        c_streak += 1
+        streak_start -= timedelta(days=1)
+
     streak_str = f"{c_streak} day" if c_streak == 1 else f"{c_streak} days"
 
     # Fetch Lessons Completed
