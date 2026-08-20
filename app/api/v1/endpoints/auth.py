@@ -273,11 +273,7 @@ async def forgot_password(
 ):
     user_result = await db.execute(select(User).filter(User.email == data.email))
     if not user_result.scalars().first():
-        return StandardResponse(
-            success=True,
-            message="If that email exists, a reset OTP has been sent.",
-            data=None
-        )
+        raise HTTPException(status_code=404, detail="Email not found")
 
     otp_code = await generate_and_save_otp(db, data.email, purpose="reset_password")
     
@@ -331,7 +327,7 @@ async def reset_password(data: ResetPassword, db: AsyncSession = Depends(get_db)
     user = user_result.scalars().first()
     
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Email not found")
 
     user.hashed_password = get_password_hash(data.new_password)
     await db.commit()
