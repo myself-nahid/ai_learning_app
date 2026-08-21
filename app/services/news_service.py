@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Optional
 
 # pyrefly: ignore [missing-import]
@@ -168,7 +169,6 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
     Fetches real live news articles from NewsAPI and uses OpenAI to rewrite them into TodAI format in parallel.
     Stores the results directly in the database.
     """
-    from datetime import datetime
     # pyrefly: ignore [missing-import]
     from sqlalchemy import select
     from app.db.models import NewsArticle
@@ -224,7 +224,17 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
             if published_at_str:
                 try:
                     # NewsAPI returns ISO8601 timestamps like 2026-08-11T07:00:00Z
-                    published_at_value = datetime.fromisoformat(published_at_str.replace("Z", "+00:00"))
+                    parsed_published_at = datetime.fromisoformat(
+                        published_at_str.replace("Z", "+00:00")
+                    )
+                    # NewsArticle uses a timezone-naive DateTime column. Store
+                    # all external timestamps as naive UTC to match it.
+                    if parsed_published_at.tzinfo:
+                        published_at_value = parsed_published_at.astimezone(
+                            timezone.utc
+                        ).replace(tzinfo=None)
+                    else:
+                        published_at_value = parsed_published_at
                 except Exception:
                     published_at_value = None
 
