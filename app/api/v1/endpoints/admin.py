@@ -23,8 +23,10 @@ import shutil
 # pyrefly: ignore [missing-import]
 from fastapi import UploadFile, File
 from app.core.security import get_password_hash, verify_password
+from app.services.user_service import validate_image_file
 
 from app.core.config import settings
+import uuid
 
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
 
@@ -490,20 +492,33 @@ async def upload_admin_image(
     admin: User = Depends(get_current_admin)
 ):
     """Upload a new profile picture for the Admin."""
+    validate_image_file(file)
+
     UPLOAD_DIR = "uploads/profiles"
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    
-    file_extension = file.filename.split(".")[-1]
-    file_name = f"admin_{admin.id}.{file_extension}"
-    file_path = os.path.join(UPLOAD_DIR, file_name)
 
+    # Remove old admin profile files so the browser does not keep showing a cached image.
+    for existing in os.listdir(UPLOAD_DIR):
+        if existing.startswith(f"admin_{admin.id}."):
+            try:
+                os.remove(os.path.join(UPLOAD_DIR, existing))
+            except OSError:
+                pass
+
+    file_extension = file.filename.rsplit(".", 1)[-1].lower()
+    unique_name = f"admin_{admin.id}_{uuid.uuid4().hex}.{file_extension}"
+    file_path = os.path.join(UPLOAD_DIR, unique_name)
+
+    file.file.seek(0)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    
-    relative_path = f"/static/profiles/{file_name}"
+
+    relative_path = f"/static/profiles/{unique_name}"
     admin.profile_image = relative_path
-    
+
     await db.commit()
+    await db.refresh(admin)
+
     return {"image_url": f"{settings.BASE_URL.rstrip('/')}{relative_path}"}
 
 # APP SETTINGS
