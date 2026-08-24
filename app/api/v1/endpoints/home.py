@@ -73,6 +73,8 @@ def get_time_ago_string(published_at: datetime) -> str:
 @router.get("/dashboard", response_model=HomeDashboardResponse)
 async def get_home_dashboard(
     category_tab: str = Query("For You", description="Selected tab in UI"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -220,6 +222,9 @@ async def get_home_dashboard(
                 seen_ids.add(fa.id)
         articles = combined_articles[:50]
 
+    start = (page - 1) * limit
+    end = start + limit
+    paginated_articles = articles[start:end]
 
     # 4. CHECK BOOKMARKS (Optimized: single query for bookmark IDs)
     bookmark_res = await db.execute(
@@ -233,7 +238,7 @@ async def get_home_dashboard(
     # 5. FORMAT FINAL NEWS LIST (map to frontend DTO shape with 100% field coverage)
     formatted_news = []
     seen_news_keys = set()
-    for art in articles:
+    for art in paginated_articles:
         article_keys = set()
         for attr in ("headline", "original_url", "id"):
             value = getattr(art, attr, None)
