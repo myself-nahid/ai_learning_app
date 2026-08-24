@@ -1,4 +1,5 @@
 import logging
+import re
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Query
 # pyrefly: ignore [missing-import]
@@ -29,6 +30,29 @@ from app.services.session_service import get_or_create_daily_session
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/home", tags=["Home & News"])
+
+
+def normalize_news_key(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def deduplicate_articles(articles: List[object]) -> List[object]:
+    unique = []
+    seen_keys = set()
+    for article in articles:
+        keys = {
+            normalize_news_key(getattr(article, "headline", None)),
+            normalize_news_key(getattr(article, "original_url", None)),
+            str(getattr(article, "id", ""))
+        }
+        dedupe_key = next((key for key in sorted(keys) if key), "")
+        if not dedupe_key or dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        unique.append(article)
+    return unique
 
 # Helper function to calculate "time ago"
 def get_time_ago_string(published_at: datetime) -> str:
@@ -172,7 +196,7 @@ async def get_home_dashboard(
 
 
     news_result = await db.execute(query)
-    articles = news_result.scalars().all()
+    articles = deduplicate_articles(news_result.scalars().all())
 
     # Fallback: If tab filter yields fewer than 10 articles, return latest articles from last 3 days
     if not articles or len(articles) < 10:
@@ -180,16 +204,16 @@ async def get_home_dashboard(
             select(NewsArticle)
             .filter(NewsArticle.published_at >= three_days_ago)
             .order_by(desc(NewsArticle.published_at))
-            .limit(20)
+            .limit(50)
         )
-        fallback_articles = fallback_res.scalars().all()
+        fallback_articles = deduplicate_articles(fallback_res.scalars().all())
         seen_ids = {a.id for a in articles}
         combined_articles = list(articles)
         for fa in fallback_articles:
             if fa.id not in seen_ids:
                 combined_articles.append(fa)
                 seen_ids.add(fa.id)
-        articles = combined_articles[:20]
+        articles = combined_articles[:50]
 
 
     # 4. CHECK BOOKMARKS (Optimized: single query for bookmark IDs)
@@ -263,8 +287,8 @@ async def get_home_dashboard(
 @router.get("/news/all", response_model=List[NewsCardResponse])
 async def get_all_news(
     category: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 20,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user) # Required for bookmark status
 ):
@@ -273,8 +297,11 @@ async def get_all_news(
     if category:
         query = query.filter(NewsArticle.category == category)
 
-    result = await db.execute(query.offset(skip).limit(limit))
-    articles = result.scalars().all()
+    result = await db.execute(query)
+    articles = deduplicate_articles(result.scalars().all())
+    start = (page - 1) * limit
+    end = start + limit
+    paginated_articles = articles[start:end]
 
     # 2. Fetch the user's bookmarks to determine 'is_bookmarked'
     bookmark_res = await db.execute(
@@ -287,11 +314,7 @@ async def get_all_news(
 
     # 3. MANUALLY CONSTRUCT THE RESPONSE (map to frontend DTO)
     response_data = []
-    seen_headlines = set()
-    for art in articles:
-        if art.headline and art.headline in seen_headlines:
-            continue
-        seen_headlines.add(art.headline)
+    for art in paginated_articles:
         published_time_val = get_time_ago_string(art.published_at) if art.published_at else "Just now"
         date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
         publisher_val = art.publisher or "TechCrunch"

@@ -26,6 +26,12 @@ AI_RELEVANCE_TERMS = [
 ]
 
 
+def _normalize_article_identity(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip().lower()
+
+
 def _normalize_text(value: Optional[str]) -> str:
     if not value:
         return ""
@@ -139,10 +145,10 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
 
     # 1. Fetch raw articles across topics and collect candidates
     raw_candidates = []
-    seen_titles = set()
+    seen_keys = set()
 
     existing_res = await db.execute(select(NewsArticle.headline))
-    existing_headlines = set(existing_res.scalars().all())
+    existing_headlines = {_normalize_article_identity(title) for title in existing_res.scalars().all() if title}
 
     for topic in topics:
         if len(raw_candidates) >= max_articles:
@@ -152,12 +158,18 @@ async def fetch_and_generate_live_news_for_user(db, topics: list = None, max_art
         for raw in raw_articles:
             if len(raw_candidates) >= max_articles:
                 break
-            
+
             title = raw.get("title")
-            if not title or "[Removed]" in title or title in seen_titles or title in existing_headlines:
+            if not title or "[Removed]" in title:
                 continue
 
-            seen_titles.add(title)
+            article_key = _normalize_article_identity(title)
+            original_key = _normalize_article_identity(raw.get("url"))
+            dedupe_key = article_key or original_key
+            if not dedupe_key or dedupe_key in seen_keys or dedupe_key in existing_headlines:
+                continue
+
+            seen_keys.add(dedupe_key)
             raw_candidates.append((raw, topic))
 
     if not raw_candidates:
