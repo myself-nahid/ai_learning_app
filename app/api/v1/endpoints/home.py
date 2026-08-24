@@ -42,15 +42,20 @@ def deduplicate_articles(articles: List[object]) -> List[object]:
     unique = []
     seen_keys = set()
     for article in articles:
-        keys = {
-            normalize_news_key(getattr(article, "headline", None)),
-            normalize_news_key(getattr(article, "original_url", None)),
-            str(getattr(article, "id", ""))
-        }
-        dedupe_key = next((key for key in sorted(keys) if key), "")
-        if not dedupe_key or dedupe_key in seen_keys:
+        keys = set()
+        for attr in ("headline", "original_url", "id"):
+            value = getattr(article, attr, None)
+            if value is None:
+                continue
+            normalized_value = normalize_news_key(str(value)) if isinstance(value, str) else str(value)
+            if normalized_value:
+                keys.add(normalized_value)
+        if not keys:
+            unique.append(article)
             continue
-        seen_keys.add(dedupe_key)
+        if keys & seen_keys:
+            continue
+        seen_keys.update(keys)
         unique.append(article)
     return unique
 
@@ -227,11 +232,20 @@ async def get_home_dashboard(
 
     # 5. FORMAT FINAL NEWS LIST (map to frontend DTO shape with 100% field coverage)
     formatted_news = []
-    seen_headlines = set()
+    seen_news_keys = set()
     for art in articles:
-        if art.headline and art.headline in seen_headlines:
+        article_keys = set()
+        for attr in ("headline", "original_url", "id"):
+            value = getattr(art, attr, None)
+            if value is None:
+                continue
+            normalized_value = normalize_news_key(str(value)) if isinstance(value, str) else str(value)
+            if normalized_value:
+                article_keys.add(normalized_value)
+        if article_keys & seen_news_keys:
             continue
-        seen_headlines.add(art.headline)
+        seen_news_keys.update(article_keys)
+
         published_time_val = get_time_ago_string(art.published_at) if art.published_at else "Just now"
         date_str = art.published_at.strftime("%d %b %Y") if art.published_at else datetime.utcnow().strftime("%d %b %Y")
         publisher_val = art.publisher or ""
