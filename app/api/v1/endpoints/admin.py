@@ -499,14 +499,16 @@ async def upload_admin_image(
 
     # Remove old admin profile files so the browser does not keep showing a cached image.
     for existing in os.listdir(UPLOAD_DIR):
-        if existing.startswith(f"admin_{admin.id}."):
+        if existing.startswith(f"admin_{admin.id}.") or existing.startswith(f"admin_{admin.id}_"):
             try:
                 os.remove(os.path.join(UPLOAD_DIR, existing))
             except OSError:
                 pass
 
-    file_extension = file.filename.rsplit(".", 1)[-1].lower()
-    unique_name = f"admin_{admin.id}_{uuid.uuid4().hex}.{file_extension}"
+    file_extension = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "jpg"
+    import time
+    timestamp = int(time.time())
+    unique_name = f"admin_{admin.id}_{timestamp}.{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, unique_name)
 
     file.file.seek(0)
@@ -519,7 +521,8 @@ async def upload_admin_image(
     await db.commit()
     await db.refresh(admin)
 
-    return {"image_url": f"{settings.BASE_URL.rstrip('/')}{relative_path}"}
+    full_url = f"{settings.BASE_URL.rstrip('/')}{relative_path}"
+    return {"image_url": full_url}
 
 # APP SETTINGS
 @router.get("/app-settings", response_model=AppSettingsSchema)

@@ -55,23 +55,27 @@ def validate_image_file(file: UploadFile) -> None:
         )
 
 
+import time
+
+
 async def save_profile_image(file: UploadFile, user_id: int) -> str:
-    """Save uploaded profile image and return the relative path."""
+    """Save uploaded profile image and return the relative path with cache-busting timestamp."""
     validate_image_file(file)
 
     UPLOAD_DIR = "uploads/profiles"
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    # Delete any existing profile image for this user (any extension)
+    # Delete any existing profile image for this user (any extension or timestamp)
     for existing in os.listdir(UPLOAD_DIR):
-        if existing.startswith(f"user_{user_id}."):
+        if existing.startswith(f"user_{user_id}.") or existing.startswith(f"user_{user_id}_"):
             try:
                 os.remove(os.path.join(UPLOAD_DIR, existing))
             except OSError:
                 pass
 
-    file_extension = file.filename.rsplit(".", 1)[-1].lower()
-    file_name = f"user_{user_id}.{file_extension}"
+    file_extension = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "jpg"
+    timestamp = int(time.time())
+    file_name = f"user_{user_id}_{timestamp}.{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, file_name)
 
     # Save the new file
