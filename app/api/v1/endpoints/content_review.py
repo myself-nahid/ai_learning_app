@@ -351,18 +351,6 @@ async def get_quality_summary(
     )
     rows = result.fetchall()
 
-    if not rows:
-        return {"period_days": days, "total_sessions": 0, "message": "No content generated in this period."}
-
-    scores = [r.quality_score for r in rows if r.quality_score is not None]
-    by_level: dict = {}
-    for row in rows:
-        level = row.level
-        if level not in by_level:
-            by_level[level] = []
-        if row.quality_score is not None:
-            by_level[level].append(row.quality_score)
-
     def _stats(score_list: list) -> dict:
         if not score_list:
             return {"count": 0, "avg": 0, "min": 0, "max": 0, "pass_rate_pct": 0}
@@ -373,6 +361,34 @@ async def get_quality_summary(
             "max": max(score_list),
             "pass_rate_pct": round(sum(1 for s in score_list if s >= 60) / len(score_list) * 100, 1),
         }
+
+    if not rows:
+        empty_stats = {"count": 0, "avg": 0, "min": 0, "max": 0, "pass_rate_pct": 0}
+        return {
+            "period_days": days,
+            "total_sessions": 0,
+            "overall": empty_stats,
+            "by_level": {
+                "Beginner": empty_stats,
+                "Intermediate": empty_stats,
+                "Advanced": empty_stats,
+            },
+            "score_distribution": {
+                "excellent_80_plus": 0,
+                "good_60_79": 0,
+                "poor_below_60": 0,
+            },
+            "message": "No content generated in this period.",
+        }
+
+    scores = [r.quality_score for r in rows if r.quality_score is not None]
+    by_level: dict = {"Beginner": [], "Intermediate": [], "Advanced": []}
+    for row in rows:
+        level = row.level or "Beginner"
+        if level not in by_level:
+            by_level[level] = []
+        if row.quality_score is not None:
+            by_level[level].append(row.quality_score)
 
     return {
         "period_days": days,
