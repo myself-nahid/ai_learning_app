@@ -212,26 +212,50 @@ async def get_user_details(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Fetch User Progress for actual Streak
+    prog_res = await db.execute(select(UserProgress).filter(UserProgress.user_id == user_id))
+    user_prog = prog_res.scalars().first()
+
     today = datetime.utcnow().date()
-    week_start = today - timedelta(days=today.weekday())
-    weekly_res = await db.execute(
-        select(WeeklyActivity)
-        .filter(
-            WeeklyActivity.user_id == user_id,
-            WeeklyActivity.week_start_date >= datetime(
-                week_start.year, week_start.month, week_start.day
-            )
-        )
-        .order_by(WeeklyActivity.week_start_date.desc())
-    )
-    weekly_activity = weekly_res.scalars().first()
-    days_active = weekly_activity.days_active if weekly_activity else {}
-    day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-    streak_start = today.weekday()
     c_streak = 0
-    while streak_start >= 0 and days_active.get(day_order[streak_start], False):
-        c_streak += 1
-        streak_start -= 1
+
+    if user_prog and user_prog.current_streak and user_prog.current_streak > 0:
+        # Check if the streak is still active (completed today or yesterday)
+        if user_prog.last_completion_date:
+            last_date = user_prog.last_completion_date.date()
+            if last_date >= today - timedelta(days=1):
+                c_streak = user_prog.current_streak
+            else:
+                # If last completion was more than 1 day ago, streak is broken
+                c_streak = 0
+        else:
+            c_streak = user_prog.current_streak
+
+    # Fallback to WeeklyActivity if UserProgress is 0 or missing
+    if c_streak == 0:
+        week_start = today - timedelta(days=today.weekday())
+        weekly_res = await db.execute(
+            select(WeeklyActivity)
+            .filter(
+                WeeklyActivity.user_id == user_id,
+                WeeklyActivity.week_start_date >= datetime(
+                    week_start.year, week_start.month, week_start.day
+                )
+            )
+            .order_by(WeeklyActivity.week_start_date.desc())
+        )
+        weekly_activity = weekly_res.scalars().first()
+        days_active = weekly_activity.days_active if weekly_activity else {}
+        day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        
+        # Check starting from today or yesterday (if today not completed yet)
+        streak_start = today.weekday()
+        if not days_active.get(day_order[streak_start], False):
+            streak_start = streak_start - 1
+            
+        while streak_start >= 0 and days_active.get(day_order[streak_start], False):
+            c_streak += 1
+            streak_start -= 1
 
     streak_str = f"{c_streak} day" if c_streak == 1 else f"{c_streak} days"
 

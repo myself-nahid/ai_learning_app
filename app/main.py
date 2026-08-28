@@ -1,20 +1,30 @@
+import os
+import logging
+from contextlib import asynccontextmanager
+
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 # pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
-# pyrefly: ignore [missing-import]
-from sqlalchemy import text
 
-from app.api.v1.endpoints import auth, users, content, quizzes, home, learn, quiz_tab, daily_briefing, admin, notifications
+from app.api.v1.endpoints import (
+    auth,
+    users,
+    content,
+    quizzes,
+    home,
+    learn,
+    quiz_tab,
+    daily_briefing,
+    admin,
+    notifications,
+    content_review,
+)
 from app.db.session import engine
 from app.db.models import Base
-from app.schemas.response import StandardResponse
-import os
-import logging
-
+from app.db.init_db import init_db
 from app.core.exceptions import (
     global_exception_handler,
     app_exception_handler,
@@ -32,10 +42,6 @@ logger = logging.getLogger(__name__)
 
 if not os.path.exists("uploads"):
     os.makedirs("uploads")
-
-from app.db.session import engine
-from app.db.models import Base
-from app.db.init_db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -76,6 +82,7 @@ app.include_router(quiz_tab.router, prefix="/api/v1")
 app.include_router(daily_briefing.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")  
 app.include_router(notifications.router, prefix="/api/v1")
+app.include_router(content_review.router, prefix="/api/v1")
 app.mount("/static", StaticFiles(directory="uploads"), name="static")
 
 @app.get("/")

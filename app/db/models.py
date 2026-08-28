@@ -260,6 +260,54 @@ class Notification(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     title = Column(String, nullable=False)
     message = Column(String, nullable=False)
-    type = Column(String, default="news") # 'news', 'pulse', 'quiz', 'system'
+    type = Column(String, default="news")  # 'news', 'pulse', 'quiz', 'system'
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+# --- CONTENT CURRICULUM MODELS ---
+
+class AiTopicCurriculum(Base):
+    """
+    Master catalog of AI concepts that TodAI teaches.
+    Used by the daily content generator to select the next unlearned topic
+    for each user, ensuring structured progression instead of random selection.
+    """
+    __tablename__ = "ai_topic_curriculum"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Identity
+    slug = Column(String, unique=True, nullable=False, index=True)   # e.g. "what-is-ai"
+    title = Column(String, nullable=False)                            # e.g. "What is Artificial Intelligence?"
+    description = Column(String, nullable=False)                      # 1–2 sentence concept overview
+
+    # Curriculum structure
+    level = Column(String, nullable=False)        # "Beginner" | "Intermediate" | "Advanced"
+    category = Column(String, nullable=False)      # "Foundations" | "Models" | "Applications" | "Safety" | "Business"
+    sequence_order = Column(Integer, nullable=False)  # Global sort order (1 = first to teach)
+
+    # Generation helpers — fed directly to the AI prompt
+    search_keywords = Column(JSON, nullable=False)    # List[str] — NewsAPI search terms for this topic
+    learning_objectives = Column(JSON, nullable=False) # List[str] — What the user should understand after this
+
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class UserConceptProgress(Base):
+    """
+    Tracks which AiTopicCurriculum entries a user has already received,
+    so the daily generator can always pick the next unlearned concept.
+    """
+    __tablename__ = "user_concept_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    topic_id = Column(Integer, ForeignKey("ai_topic_curriculum.id"), nullable=False)
+
+    taught_at = Column(DateTime, default=datetime.datetime.utcnow)  # When content was generated
+    quality_score = Column(Integer, default=0)   # 0–100 score assigned at generation time
+    session_id = Column(Integer, ForeignKey("daily_sessions.id"), nullable=True)  # Link back to the daily session
+
+    topic = relationship("AiTopicCurriculum")

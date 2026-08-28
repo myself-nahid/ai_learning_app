@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore [missing-import]
-from sqlalchemy import select
+from sqlalchemy import select, or_
 # pyrefly: ignore [missing-import]
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, date
@@ -351,9 +351,13 @@ async def _ensure_news_learning_path(
     image_url = article.image_url or "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=300&auto=format&fit=crop"
     description = (article.summary or f"Learn about {topic_label} and how it applies to your work.").strip()
 
-    # ── Look up existing path with this exact title ──────────────────────────
+    # ── Look up existing path with matching title or news image_url ──────────
+    lookup_conditions = [LearningPath.title == display_title]
+    if image_url and not image_url.startswith("https://images.unsplash.com"):
+        lookup_conditions.append(LearningPath.image_url == image_url)
+    
     existing_path_res = await db.execute(
-        select(LearningPath).filter(LearningPath.title == display_title)
+        select(LearningPath).filter(or_(*lookup_conditions))
     )
     existing_path = existing_path_res.scalars().first()
 
@@ -811,9 +815,16 @@ async def get_learn_dashboard(
             if continue_learning:
                 break
 
-    # ── Learning Paths (all real paths with dynamic counts) ─────────────────
+    # ── Learning Paths (deduplicated by unique topic/image) ────────────────
     learning_paths = []
+    seen_path_keys = set()
     for p in paths:
+        norm_title = p.title.strip().lower()
+        key = p.image_url if (p.image_url and not p.image_url.startswith("https://images.unsplash.com")) else norm_title[:30]
+        if key in seen_path_keys:
+            continue
+        seen_path_keys.add(key)
+
         actual_total_lessons = len(p.lessons) if p.lessons else (p.total_lessons or 1)
         path_lesson_ids = {les.id for les in p.lessons} if p.lessons else set()
         path_completed = sum(
@@ -837,52 +848,70 @@ async def get_learn_dashboard(
             "image_url": p.image_url,
         })
 
-    # ── Recommended Lessons (news + paths, prioritized by uncompleted) ──────
+    # ── Recommended Lessons (strictly 1 lesson per unique path/topic, no duplicates) ──
+    continue_les_id = continue_learning["lesson_id"] if continue_learning else None
+    continue_path_id = continue_learning["path_id"] if continue_learning else None
+
     candidate_lessons = []
-    for ctx in news_path_contexts:
-        candidate_lessons.append({
-            "id": ctx["lesson_id"],
-            "lesson_id": ctx["lesson_id"],
-            "path_id": ctx["path_id"],
-            "title": ctx["title"],
-            "description": ctx["description"],
-            "level": ctx.get("level", "Beginner"),
-            "category": _clean_category_name(ctx.get("path_title") or ctx.get("title") or ""),
-            "image_url": ctx["image_url"],
-        })
+    seen_rec_paths = set()
+    seen_rec_images = set()
+
+    # If continue_learning exists, mark its path and image as seen so we don't duplicate it below
+    if continue_path_id:
+        seen_rec_paths.add(continue_path_id)
+    if continue_learning and continue_learning.get("image_url") and not continue_learning["image_url"].startswith("https://images.unsplash.com"):
+        seen_rec_images.add(continue_learning["image_url"])
 
     for p in paths:
+        if p.id in seen_rec_paths:
+            continue
+        if p.image_url and not p.image_url.startswith("https://images.unsplash.com") and p.image_url in seen_rec_images:
+            continue
+
         sorted_p_lessons = sorted(p.lessons, key=lambda x: x.sequence_order)
+        if not sorted_p_lessons:
+            continue
+
+        # Choose the single next uncompleted unlocked lesson in this path
+        target_lesson = None
         for idx, les in enumerate(sorted_p_lessons):
             prev_les = sorted_p_lessons[idx - 1] if idx > 0 else None
             is_unlocked = (idx == 0) or (prev_les and prev_les.id in completed_lesson_ids)
-            if is_unlocked and les.id not in {c["lesson_id"] for c in candidate_lessons}:
-                candidate_lessons.append({
-                    "id": les.id,
-                    "lesson_id": les.id,
-                    "path_id": p.id,
-                    "title": les.title,
-                    "description": les.description or p.description,
-                    "level": p.level or "Beginner",
-                    "category": _clean_category_name(p.title),
-                    "image_url": p.image_url,
-                })
+            if is_unlocked and les.id not in completed_lesson_ids:
+                target_lesson = les
+                break
 
-    uncompleted_candidates = [c for c in candidate_lessons if c["lesson_id"] not in completed_lesson_ids]
-    completed_candidates = [c for c in candidate_lessons if c["lesson_id"] in completed_lesson_ids]
-    ordered_candidates = uncompleted_candidates + completed_candidates
+        if not target_lesson:
+            # If all are completed or none unlocked, pick the first lesson
+            target_lesson = sorted_p_lessons[0]
 
-    recommended_lessons = []
-    for cand in ordered_candidates:
-        lesson_res = await db.execute(select(Lesson).filter(Lesson.id == cand["lesson_id"]))
-        lesson = lesson_res.scalars().first()
-        cards_data = _extract_lesson_cards_data(lesson)
+        if target_lesson.id == continue_les_id:
+            continue
+
+        seen_rec_paths.add(p.id)
+        if p.image_url and not p.image_url.startswith("https://images.unsplash.com"):
+            seen_rec_images.add(p.image_url)
+
+        cards_data = _extract_lesson_cards_data(target_lesson)
         total_cards = len(cards_data) if cards_data else 1
-        duration_mins = lesson.estimated_minutes if lesson else max(3, math.ceil(total_cards * 1.2))
-        recommended_lessons.append({
-            **cand,
+        duration_mins = target_lesson.estimated_minutes if target_lesson else max(3, math.ceil(total_cards * 1.2))
+
+        candidate_lessons.append({
+            "id": target_lesson.id,
+            "lesson_id": target_lesson.id,
+            "path_id": p.id,
+            "title": target_lesson.title,
+            "description": target_lesson.description or p.description,
+            "level": p.level or "Beginner",
+            "category": _clean_category_name(p.title),
+            "image_url": p.image_url,
             "duration": f"{duration_mins} min",
         })
+
+    # Prioritize uncompleted lessons over already completed ones
+    uncompleted_candidates = [c for c in candidate_lessons if c["lesson_id"] not in completed_lesson_ids]
+    completed_candidates = [c for c in candidate_lessons if c["lesson_id"] in completed_lesson_ids]
+    recommended_lessons = uncompleted_candidates + completed_candidates
 
     return {
         "weekly_stats": weekly_stats,
