@@ -3,7 +3,9 @@ import logging
 from datetime import datetime
 import random
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import selectinload
 
 from app.worker.celery_app import celery_app
@@ -17,6 +19,7 @@ from app.db.models import (
     Lesson,
     AiTopicCurriculum,
     UserConceptProgress,
+    UserLessonProgress,
 )
 from app.services.news_service import fetch_raw_ai_news
 from app.services.ai_service import transform_news_to_todai_format
@@ -186,31 +189,77 @@ async def process_real_daily_pulse_for_all_users():
                     article_batch.append(new_article)
 
                 # ── 4. Assign the predefined lesson; news must not generate it ──
+                # Primary lookup: AiTopicCurriculum topics materialize a
+                # LearningPath with curriculum_slug == topic.slug. Never match by
+                # global sequence_order — that cross-links lessons from unrelated
+                # Excel blocks.
                 lesson_res = await db.execute(
                     select(Lesson)
-                    .join(LearningPath)
+                    .join(LearningPath, Lesson.path_id == LearningPath.id)
                     .where(
-                        Lesson.sequence_order == topic.sequence_order,
+                        LearningPath.curriculum_slug == topic.slug,
                         LearningPath.source_type == "curriculum",
                     )
+                    .order_by(Lesson.sequence_order)
+                    .limit(1)
                 )
                 curriculum_lesson = lesson_res.scalars().first()
 
                 if not curriculum_lesson:
-                    logger.warning(
-                        "No materialized curriculum lesson for topic '%s'; skipping user %d.",
-                        topic.title,
+                    # Fallback: assign the user's next uncompleted lesson from the
+                    # Excel curriculum blocks. This keeps the Daily Pulse intact
+                    # (news + lesson + quiz) even when a topic has no materialized
+                    # path, instead of dropping the user's whole session.
+                    completed_ids_res = await db.execute(
+                        select(UserLessonProgress.lesson_id).where(
+                            UserLessonProgress.user_id == user.id,
+                            UserLessonProgress.status == "completed",
+                        )
+                    )
+                    completed_lesson_ids = {r[0] for r in completed_ids_res.fetchall()}
+
+                    curriculum_lessons_res = await db.execute(
+                        select(Lesson)
+                        .join(LearningPath, Lesson.path_id == LearningPath.id)
+                        .where(
+                            LearningPath.source_type == "curriculum",
+                            LearningPath.curriculum_slug.isnot(None),
+                        )
+                        .order_by(LearningPath.id, Lesson.sequence_order)
+                    )
+                    for candidate in curriculum_lessons_res.scalars().all():
+                        if candidate.id not in completed_lesson_ids:
+                            curriculum_lesson = candidate
+                            break
+                    if curriculum_lesson is None and curriculum_lessons_res:
+                        pass  # all completed — keep None, session still gets news
+
+                if curriculum_lesson:
+                    logger.info(
+                        "Assigned curriculum lesson '%s' (id=%s) for user %d",
+                        curriculum_lesson.title,
+                        curriculum_lesson.id,
                         user.id,
                     )
-                    continue
+                else:
+                    logger.warning(
+                        "No curriculum lesson available for user %d; Daily Pulse will contain news only.",
+                        user.id,
+                    )
 
                 # ── 5. Create the Daily Session ──────────────────────────────
                 new_session = DailySession(
                     user_id=user.id,
                     date=datetime.utcnow(),
                     assigned_news_ids=[article.id for article in article_batch],
-                    lesson_data={"curriculum_lesson_id": curriculum_lesson.id},
-                    curriculum_lesson_id=curriculum_lesson.id,
+                    lesson_data=(
+                        {"curriculum_lesson_id": curriculum_lesson.id}
+                        if curriculum_lesson
+                        else {}
+                    ),
+                    curriculum_lesson_id=(
+                        curriculum_lesson.id if curriculum_lesson else None
+                    ),
                     news_completed=0,
                     lesson_completed=False,
                     quiz_completed=False,
@@ -233,15 +282,22 @@ async def process_real_daily_pulse_for_all_users():
                     action_type="AI_GEN_SUCCESS",
                     description=(
                         f"Daily Pulse generated for {user.full_name} | "
-                        f"Topic: '{topic.title}' | Quality: 100/100"
+                        f"Topic: '{topic.title}' | "
+                        + (
+                            f"Lesson: '{curriculum_lesson.title}' | "
+                            if curriculum_lesson
+                            else "Lesson: none available | "
+                        )
+                        + "Quality: 100/100"
                     ),
                 )
                 db.add(activity_log)
 
                 logger.info(
-                    "✅ Daily Pulse for user %s — topic: '%s' | quality: %d/100",
+                    "✅ Daily Pulse for user %s — topic: '%s' | lesson: %s | quality: %d/100",
                     user.email,
                     topic.title,
+                    curriculum_lesson.title if curriculum_lesson else "none",
                     100,
                 )
 

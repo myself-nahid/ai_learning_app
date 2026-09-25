@@ -393,6 +393,8 @@ async def _ensure_news_learning_path(
     total_minutes = sum(d["estimated_minutes"] for d in multi_lessons_data)
     path_level = _determine_article_level(article, 1)
 
+    # source_type="news" keeps news-derived content OUT of the Learning Feed,
+    # which is strictly curriculum-sourced (source_type="curriculum").
     new_path = LearningPath(
         title=display_title,
         description=description,
@@ -400,6 +402,7 @@ async def _ensure_news_learning_path(
         total_lessons=total_lessons,
         total_minutes=total_minutes,
         image_url=image_url,
+        source_type="news",
     )
     db.add(new_path)
     await db.flush()  # Assigns new_path.id
