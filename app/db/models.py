@@ -129,6 +129,7 @@ class DailySession(Base):
     date = Column(DateTime, default=datetime.datetime.utcnow)
     assigned_news_ids = Column(JSON, nullable=False) # List of IDs
     lesson_data = Column(JSON, nullable=True)
+    curriculum_lesson_id = Column(Integer, ForeignKey("lessons.id"), nullable=True)
     news_completed = Column(Integer, default=0)
     lesson_completed = Column(Boolean, default=False)
     quiz_completed = Column(Boolean, default=False)
@@ -147,6 +148,8 @@ class LearningPath(Base):
     total_lessons = Column(Integer, default=0)
     total_minutes = Column(Integer, default=0)
     image_url = Column(String)
+    source_type = Column(String, nullable=False, default="curriculum")
+    curriculum_slug = Column(String, nullable=True, unique=True)
     
     lessons = relationship("Lesson", back_populates="path", order_by="Lesson.sequence_order")
 
@@ -159,6 +162,7 @@ class Lesson(Base):
     title = Column(String, nullable=False) # e.g., "How AI Models Learn"
     description = Column(String)
     estimated_minutes = Column(Integer, default=5)
+    learning_goal = Column(String, nullable=True)
     
     # JSON array containing all cards (Text, Example, Comparison, List, Quiz)
     cards_data = Column(JSON, nullable=False) 
@@ -310,4 +314,4 @@ class UserConceptProgress(Base):
     quality_score = Column(Integer, default=0)   # 0–100 score assigned at generation time
     session_id = Column(Integer, ForeignKey("daily_sessions.id"), nullable=True)  # Link back to the daily session
 
-    topic = relationship("AiTopicCurriculum")
+    topic = relationship("AiTopicCurriculum")

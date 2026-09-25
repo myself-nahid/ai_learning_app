@@ -13,11 +13,13 @@ from app.db.models import (
     User,
     NewsArticle,
     DailySession,
+    LearningPath,
+    Lesson,
     AiTopicCurriculum,
     UserConceptProgress,
 )
 from app.services.news_service import fetch_raw_ai_news
-from app.services.ai_service import transform_news_to_todai_format, generate_lesson_and_quiz
+from app.services.ai_service import transform_news_to_todai_format
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ async def process_real_daily_pulse_for_all_users():
     1. Select the next unlearned AI topic from the curriculum (not random)
     2. Fetch real news articles related to that topic from NewsAPI
     3. Transform articles to TodAI format using improved OpenAI prompts
-    4. Generate a structured 6–8 card lesson with quality scoring
+    4. Assign the matching predefined curriculum lesson
     5. Save the DailySession and record concept progress
     """
     async with SessionLocal() as db:
@@ -157,15 +159,13 @@ async def process_real_daily_pulse_for_all_users():
 
                 if not raw_articles:
                     logger.warning(
-                        "No news articles found for topic '%s'. Skipping user %d.",
+                        "No news articles found for topic '%s'; continuing with curriculum only for user %d.",
                         topic.title,
                         user.id,
                     )
-                    continue
 
                 # ── 3. Transform up to 3 articles into TodAI format ─────────
                 article_batch = []
-                primary_article_content = ""
 
                 for source_article in raw_articles[:3]:
                     ai_news_data = await transform_news_to_todai_format(source_article, topic.category)
@@ -185,37 +185,32 @@ async def process_real_daily_pulse_for_all_users():
                     await db.flush()
                     article_batch.append(new_article)
 
-                    # Use the first article's content to ground the lesson
-                    if not primary_article_content:
-                        primary_article_content = (
-                            source_article.get("content")
-                            or source_article.get("description")
-                            or ""
-                        )
-
-                if not article_batch:
-                    continue
-
-                # ── 4. Generate the lesson using the full curriculum context ─
-                lesson_data = await generate_lesson_and_quiz(
-                    news_headline=article_batch[0].headline,
-                    news_content=primary_article_content,
-                    interest=topic.category,
-                    level=user.profile.ai_level or "Beginner",
-                    topic_title=topic.title,
-                    topic_description=topic.description,
-                    learning_objectives=topic.learning_objectives or [],
-                    practical_focus=None,
+                # ── 4. Assign the predefined lesson; news must not generate it ──
+                lesson_res = await db.execute(
+                    select(Lesson)
+                    .join(LearningPath)
+                    .where(
+                        Lesson.sequence_order == topic.sequence_order,
+                        LearningPath.source_type == "curriculum",
+                    )
                 )
+                curriculum_lesson = lesson_res.scalars().first()
 
-                quality_score = lesson_data.get("quality_score", 0)
+                if not curriculum_lesson:
+                    logger.warning(
+                        "No materialized curriculum lesson for topic '%s'; skipping user %d.",
+                        topic.title,
+                        user.id,
+                    )
+                    continue
 
                 # ── 5. Create the Daily Session ──────────────────────────────
                 new_session = DailySession(
                     user_id=user.id,
                     date=datetime.utcnow(),
                     assigned_news_ids=[article.id for article in article_batch],
-                    lesson_data=lesson_data,
+                    lesson_data={"curriculum_lesson_id": curriculum_lesson.id},
+                    curriculum_lesson_id=curriculum_lesson.id,
                     news_completed=0,
                     lesson_completed=False,
                     quiz_completed=False,
@@ -228,7 +223,7 @@ async def process_real_daily_pulse_for_all_users():
                     user_id=user.id,
                     topic_id=topic.id,
                     taught_at=datetime.utcnow(),
-                    quality_score=quality_score,
+                    quality_score=100,
                     session_id=new_session.id,
                 )
                 db.add(concept_progress)
@@ -238,7 +233,7 @@ async def process_real_daily_pulse_for_all_users():
                     action_type="AI_GEN_SUCCESS",
                     description=(
                         f"Daily Pulse generated for {user.full_name} | "
-                        f"Topic: '{topic.title}' | Quality: {quality_score}/100"
+                        f"Topic: '{topic.title}' | Quality: 100/100"
                     ),
                 )
                 db.add(activity_log)
@@ -247,7 +242,7 @@ async def process_real_daily_pulse_for_all_users():
                     "✅ Daily Pulse for user %s — topic: '%s' | quality: %d/100",
                     user.email,
                     topic.title,
-                    quality_score,
+                    100,
                 )
 
             except Exception as e:

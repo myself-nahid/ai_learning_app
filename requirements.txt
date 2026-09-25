@@ -16,3 +16,4 @@ aiofiles>=23.0.0
 firebase-admin>=6.2.0
 pytz>=2023.3
 httpx>=0.24.0
+openpyxl>=3.1.0

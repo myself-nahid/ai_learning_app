@@ -4,7 +4,7 @@ from sqlalchemy import text
 # pyrefly: ignore [missing-import]
 from sqlalchemy import select
 from app.db.session import SessionLocal, engine
-from app.db.models import AiTopicCurriculum
+from app.db.models import AiTopicCurriculum, LearningPath, Lesson
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,18 @@ async def ensure_db_columns():
         ))
         await conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR DEFAULT 'user'"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE learning_paths ADD COLUMN IF NOT EXISTS source_type VARCHAR NOT NULL DEFAULT 'curriculum'"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE learning_paths ADD COLUMN IF NOT EXISTS curriculum_slug VARCHAR"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS learning_goal VARCHAR"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE daily_sessions ADD COLUMN IF NOT EXISTS curriculum_lesson_id INTEGER"
         ))
     logger.info("Schema columns check complete.")
 
@@ -710,6 +722,74 @@ async def seed_curriculum():
             logger.info("Seeded %d new AI curriculum topics into ai_topic_curriculum.", new_count)
         else:
             logger.info("AI curriculum already up to date (%d topics).", len(existing_slugs))
+
+
+def _curriculum_cards(topic: AiTopicCurriculum) -> list[dict]:
+    """Build the fixed user-facing lesson flow from curriculum metadata."""
+    objectives = topic.learning_objectives or []
+    remember_text = " ".join(str(item) for item in objectives) or topic.description
+    example_text = (
+        f"Practice applying the idea of {topic.title.lower()} to a familiar task. "
+        f"Start with the situation, identify the relevant concept, and explain what result you expect."
+    )
+    return [
+        {"id": "card_1", "cardType": "intro", "section": "what_is_it", "title": "What Is It?", "bodyText": topic.description},
+        {"id": "card_2", "cardType": "concept", "section": "how_does_it_work", "title": "How Does It Work?", "bodyText": " ".join(str(item) for item in objectives[:2]) or topic.description},
+        {"id": "card_3", "cardType": "example", "section": "real_example", "title": "Real Example / Practice Exercise", "bodyText": example_text},
+        {"id": "card_4", "cardType": "takeaway", "section": "remember", "title": "What Should I Remember?", "bodyText": remember_text},
+    ]
+
+
+async def seed_learning_paths_from_curriculum():
+    """Materialize catalog topics as independent Learning Feed content."""
+    async with SessionLocal() as db:
+        topics_result = await db.execute(
+            select(AiTopicCurriculum)
+            .where(AiTopicCurriculum.is_active == True)
+            .order_by(AiTopicCurriculum.sequence_order)
+        )
+        topics = topics_result.scalars().all()
+
+        for topic in topics:
+            path_result = await db.execute(
+                select(LearningPath).where(LearningPath.curriculum_slug == topic.slug)
+            )
+            path = path_result.scalars().first()
+            if not path:
+                path = LearningPath(
+                    title=topic.title,
+                    description=topic.description,
+                    level=topic.level,
+                    total_lessons=1,
+                    total_minutes=5,
+                    source_type="curriculum",
+                    curriculum_slug=topic.slug,
+                )
+                db.add(path)
+                await db.flush()
+            else:
+                path.source_type = "curriculum"
+                path.title = topic.title
+                path.description = topic.description
+                path.level = topic.level
+                path.total_lessons = 1
+                path.total_minutes = 5
+
+            lesson_result = await db.execute(
+                select(Lesson).where(Lesson.path_id == path.id, Lesson.sequence_order == 1)
+            )
+            lesson = lesson_result.scalars().first()
+            if not lesson:
+                lesson = Lesson(path_id=path.id, sequence_order=1)
+                db.add(lesson)
+            lesson.title = topic.title
+            lesson.description = topic.description
+            lesson.learning_goal = " ".join(topic.learning_objectives or []) or topic.description
+            lesson.estimated_minutes = 5
+            lesson.cards_data = _curriculum_cards(topic)
+
+        await db.commit()
+        logger.info("Materialized %d curriculum topics as Learning Feed paths.", len(topics))
 
 
 async def init_db():

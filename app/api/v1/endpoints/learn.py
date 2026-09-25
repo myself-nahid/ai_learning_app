@@ -717,42 +717,16 @@ async def get_learn_dashboard(
         "days_active": days_active
     }
 
-    # Only use news from the last 3 days — keeps learning content fresh
-    three_days_ago = datetime.utcnow() - timedelta(days=3)
-
-    news_res = await db.execute(
-        select(NewsArticle)
-        .filter(NewsArticle.published_at >= three_days_ago)
-        .order_by(NewsArticle.published_at.desc())
-        .limit(10)
+    # Learning Feed is curriculum-owned. NewsArticle is intentionally not read here.
+    paths_res = await db.execute(
+        select(LearningPath)
+        .options(selectinload(LearningPath.lessons))
+        .filter(
+            LearningPath.source_type == "curriculum",
+            LearningPath.curriculum_slug.isnot(None),
+        )
+        .order_by(LearningPath.id)
     )
-    latest_news = news_res.scalars().all()
-
-    # ── Ensure every news article has a real LearningPath + Lesson ──────────
-    # This auto-creates DB rows if they don't exist yet, so we always get real IDs.
-    news_path_contexts: List[Dict[str, Any]] = []
-    fresh_path_ids: set = set()
-    for article in latest_news:
-        ctx = await _ensure_news_learning_path(db, article)
-        if ctx:
-            news_path_contexts.append(ctx)
-            fresh_path_ids.add(ctx["path_id"])
-
-    # Fetch only LearningPaths tied to fresh (≤3 day) news articles.
-    # This excludes stale paths from old news while keeping user progress intact.
-    if fresh_path_ids:
-        paths_res = await db.execute(
-            select(LearningPath)
-            .options(selectinload(LearningPath.lessons))
-            .filter(LearningPath.id.in_(fresh_path_ids))
-        )
-    else:
-        paths_res = await db.execute(
-            select(LearningPath)
-            .options(selectinload(LearningPath.lessons))
-            .order_by(LearningPath.id.desc())
-            .limit(20)
-        )
     paths = paths_res.scalars().all()
 
     # Get all user progress records at once
@@ -787,22 +761,7 @@ async def get_learn_dashboard(
             cards_done = active_progress.cards_completed or 0
             continue_learning = _build_continue_learning_payload(path, lesson, cards_done, all_progress)
 
-    # Priority 2: First news-derived path's lesson if uncompleted
-    if not continue_learning and news_path_contexts:
-        for ctx in news_path_contexts:
-            if ctx["lesson_id"] not in completed_lesson_ids:
-                lesson_res = await db.execute(select(Lesson).filter(Lesson.id == ctx["lesson_id"]))
-                lesson = lesson_res.scalars().first()
-                path_res = await db.execute(select(LearningPath).options(selectinload(LearningPath.lessons)).filter(LearningPath.id == ctx["path_id"]))
-                path = path_res.scalars().first()
-
-                if lesson and path:
-                    prog_for_les = next((pr for pr in all_progress if pr.lesson_id == ctx["lesson_id"]), None)
-                    cards_done = prog_for_les.cards_completed if prog_for_les else 0
-                    continue_learning = _build_continue_learning_payload(path, lesson, cards_done, all_progress)
-                    break
-
-    # Priority 3: First available uncompleted lesson from any existing path
+    # Priority 2: First available uncompleted lesson from the curriculum.
     if not continue_learning:
         for p in paths:
             sorted_les = sorted(p.lessons, key=lambda x: x.sequence_order)

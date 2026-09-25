@@ -46,6 +46,18 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Import the Learning Feed Curriculum
+
+Place the curriculum workbook in the repository and run the idempotent importer:
+
+```powershell
+py scripts/import_curriculum.py .\data\TodAI_Lessons_1-98.xlsx
+```
+
+The importer creates four curriculum learning paths and 98 ordered lessons. Each lesson exposes four learner-facing sections: `What Is It?`, `How Does It Work?`, `Real Example / Practice Exercise`, and `What Should I Remember?`. The `Learning Goal` is stored for content management and tracking, but is not returned as a lesson card.
+
+News articles remain independent and are never used to create or rewrite curriculum lessons.
+
 ## Environment Variables
 
 Create a `.env` file in the project root with these values:
