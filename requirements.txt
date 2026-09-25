@@ -1,5 +1,6 @@
 fastapi[all]>=0.104.0
-sqlalchemy>=2.0.23
+sqlalchemy[asyncio]>=2.0.23
+greenlet>=3.0.0
 asyncpg>=0.29.0
 passlib[bcrypt]>=1.7.4
 pyjwt>=2.8.0

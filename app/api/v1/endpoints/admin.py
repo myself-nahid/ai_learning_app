@@ -12,10 +12,18 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_admin
-from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress, Lesson, QuizSet, DailyFeed, UserNewsInteraction, WeeklyActivity, Notification
+from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress, Lesson, LearningPath, QuizSet, DailyFeed, UserNewsInteraction, WeeklyActivity, Notification
 
 
-from app.schemas.admin import AdminDashboardResponse, AdminProfileResponse, AdminProfileUpdate, AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem, AdminUserListResponse, AppSettingsSchema, AppSettingsUpdate, KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest
+from app.schemas.admin import (
+    AdminDashboardResponse, AdminProfileResponse, AdminProfileUpdate,
+    AdminUserDetailResponse, AdminUserDetailStats, AdminUserListItem,
+    AdminUserListResponse, AppSettingsSchema, AppSettingsUpdate,
+    KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest,
+    CurriculumListResponse, CurriculumPathItem, CurriculumLessonItem,
+    LessonCreateRequest, LessonUpdateRequest,
+    PathCreateRequest, PathUpdateRequest, CurriculumImportResponse,
+)
 from app.schemas.response import ImageUploadResponse, MessageResponse, SuspendActionResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
 import os
@@ -601,3 +609,344 @@ async def update_app_settings(
     await db.refresh(app_config)
     
     return app_config
+
+
+# ── CURRICULUM MANAGEMENT ──────────────────────────────────────────────────
+
+@router.get("/curriculum", response_model=CurriculumListResponse)
+async def get_curriculum(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """
+    List all curriculum LearningPaths with their Lessons.
+    Ordered by LearningPath.id (i.e., block order) then Lesson.sequence_order.
+    """
+    paths_res = await db.execute(
+        select(LearningPath)
+        .options(selectinload(LearningPath.lessons))
+        .filter(LearningPath.source_type == "curriculum")
+        .order_by(LearningPath.id)
+    )
+    paths = paths_res.scalars().all()
+
+    path_items = []
+    total_lessons = 0
+    for p in paths:
+        sorted_lessons = sorted(p.lessons or [], key=lambda l: l.sequence_order)
+        lesson_items = [
+            CurriculumLessonItem(
+                lesson_id=l.id,
+                path_id=p.id,
+                sequence_order=l.sequence_order,
+                title=l.title,
+                description=l.description,
+                learning_goal=l.learning_goal,
+                estimated_minutes=l.estimated_minutes or 5,
+                cards_data=l.cards_data if isinstance(l.cards_data, list) else [],
+            )
+            for l in sorted_lessons
+        ]
+        total_lessons += len(lesson_items)
+        path_items.append(
+            CurriculumPathItem(
+                path_id=p.id,
+                title=p.title,
+                description=p.description,
+                level=p.level or "Beginner",
+                total_lessons=len(lesson_items),
+                total_minutes=sum(l.estimated_minutes or 5 for l in sorted_lessons),
+                curriculum_slug=p.curriculum_slug,
+                lessons=lesson_items,
+            )
+        )
+
+    return CurriculumListResponse(
+        total_paths=len(path_items),
+        total_lessons=total_lessons,
+        paths=path_items,
+    )
+
+
+@router.post("/curriculum/import-excel", response_model=CurriculumImportResponse)
+async def import_excel_curriculum(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Re-import / refresh the curriculum from the Excel file.
+    This is idempotent — existing paths/lessons are updated, not duplicated.
+    """
+    from app.db.seed_excel_curriculum import seed_excel_learning_paths, parse_excel_curriculum
+    from app.db.session import SessionLocal
+
+    # Count before
+    before_paths_res = await db.execute(
+        select(func.count(LearningPath.id)).filter(LearningPath.source_type == "curriculum")
+    )
+    before_lessons_res = await db.execute(
+        select(func.count(Lesson.id))
+        .join(LearningPath, Lesson.path_id == LearningPath.id)
+        .filter(LearningPath.source_type == "curriculum")
+    )
+    before_paths = before_paths_res.scalar() or 0
+    before_lessons = before_lessons_res.scalar() or 0
+
+    await seed_excel_learning_paths(SessionLocal)
+
+    # Count after (re-query in same session after commit)
+    after_paths_res = await db.execute(
+        select(func.count(LearningPath.id)).filter(LearningPath.source_type == "curriculum")
+    )
+    after_lessons_res = await db.execute(
+        select(func.count(Lesson.id))
+        .join(LearningPath, Lesson.path_id == LearningPath.id)
+        .filter(LearningPath.source_type == "curriculum")
+    )
+    after_paths = after_paths_res.scalar() or 0
+    after_lessons = after_lessons_res.scalar() or 0
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_IMPORT",
+        description=f"{admin.full_name} re-imported curriculum from Excel. "
+                    f"Paths: {before_paths}→{after_paths}, Lessons: {before_lessons}→{after_lessons}"
+    ))
+    await db.commit()
+
+    return CurriculumImportResponse(
+        message="Curriculum successfully imported from Excel.",
+        paths_upserted=after_paths,
+        lessons_upserted=after_lessons,
+    )
+
+
+@router.post("/curriculum/paths", response_model=CurriculumPathItem)
+async def create_curriculum_path(
+    data: PathCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Create a new curriculum learning path (block)."""
+    path = LearningPath(
+        title=data.title,
+        description=data.description or "",
+        level=data.level,
+        total_lessons=0,
+        total_minutes=0,
+        source_type="curriculum",
+    )
+    db.add(path)
+    await db.commit()
+    await db.refresh(path)
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_PATH_CREATED",
+        description=f"{admin.full_name} created curriculum path: {data.title}"
+    ))
+    await db.commit()
+
+    return CurriculumPathItem(
+        path_id=path.id, title=path.title, description=path.description,
+        level=path.level, total_lessons=0, total_minutes=0,
+        curriculum_slug=path.curriculum_slug, lessons=[],
+    )
+
+
+@router.patch("/curriculum/paths/{path_id}", response_model=CurriculumPathItem)
+async def update_curriculum_path(
+    path_id: int,
+    data: PathUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Update a curriculum path's title, description, or level."""
+    res = await db.execute(
+        select(LearningPath).options(selectinload(LearningPath.lessons)).filter(LearningPath.id == path_id)
+    )
+    path = res.scalars().first()
+    if not path:
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    if data.title is not None:
+        path.title = data.title
+    if data.description is not None:
+        path.description = data.description
+    if data.level is not None:
+        path.level = data.level
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_PATH_UPDATED",
+        description=f"{admin.full_name} updated curriculum path #{path_id}: {path.title}"
+    ))
+    await db.commit()
+    await db.refresh(path)
+
+    sorted_lessons = sorted(path.lessons or [], key=lambda l: l.sequence_order)
+    return CurriculumPathItem(
+        path_id=path.id, title=path.title, description=path.description,
+        level=path.level or "Beginner",
+        total_lessons=len(sorted_lessons),
+        total_minutes=sum(l.estimated_minutes or 5 for l in sorted_lessons),
+        curriculum_slug=path.curriculum_slug,
+        lessons=[
+            CurriculumLessonItem(
+                lesson_id=l.id, path_id=path.id,
+                sequence_order=l.sequence_order, title=l.title,
+                description=l.description, learning_goal=l.learning_goal,
+                estimated_minutes=l.estimated_minutes or 5,
+                cards_data=l.cards_data if isinstance(l.cards_data, list) else [],
+            ) for l in sorted_lessons
+        ],
+    )
+
+
+@router.delete("/curriculum/paths/{path_id}", response_model=MessageResponse)
+async def delete_curriculum_path(
+    path_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Delete a curriculum path and all its lessons."""
+    res = await db.execute(select(LearningPath).filter(LearningPath.id == path_id))
+    path = res.scalars().first()
+    if not path:
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    path_title = path.title
+    # Delete child lessons first
+    await db.execute(Lesson.__table__.delete().where(Lesson.path_id == path_id))
+    await db.execute(UserLessonProgress.__table__.delete().where(UserLessonProgress.path_id == path_id))
+    await db.delete(path)
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_PATH_DELETED",
+        description=f"{admin.full_name} deleted curriculum path: {path_title}"
+    ))
+    await db.commit()
+    return {"message": f"Path '{path_title}' and all its lessons have been deleted."}
+
+
+@router.post("/curriculum/lessons", response_model=CurriculumLessonItem)
+async def create_curriculum_lesson(
+    data: LessonCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Add a new lesson to an existing curriculum path."""
+    path_res = await db.execute(select(LearningPath).filter(LearningPath.id == data.path_id))
+    path = path_res.scalars().first()
+    if not path:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+
+    lesson = Lesson(
+        path_id=data.path_id,
+        sequence_order=data.sequence_order,
+        title=data.title,
+        description=data.description,
+        learning_goal=data.learning_goal,
+        estimated_minutes=data.estimated_minutes,
+        cards_data=data.cards_data,
+    )
+    db.add(lesson)
+
+    # Update path totals
+    lessons_res = await db.execute(select(Lesson).filter(Lesson.path_id == data.path_id))
+    all_lessons = lessons_res.scalars().all()
+    path.total_lessons = len(all_lessons) + 1
+    path.total_minutes = (len(all_lessons) + 1) * data.estimated_minutes
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_LESSON_CREATED",
+        description=f"{admin.full_name} added lesson '{data.title}' to path #{data.path_id}"
+    ))
+    await db.commit()
+    await db.refresh(lesson)
+
+    return CurriculumLessonItem(
+        lesson_id=lesson.id, path_id=lesson.path_id,
+        sequence_order=lesson.sequence_order, title=lesson.title,
+        description=lesson.description, learning_goal=lesson.learning_goal,
+        estimated_minutes=lesson.estimated_minutes or 5,
+        cards_data=lesson.cards_data if isinstance(lesson.cards_data, list) else [],
+    )
+
+
+@router.patch("/curriculum/lessons/{lesson_id}", response_model=CurriculumLessonItem)
+async def update_curriculum_lesson(
+    lesson_id: int,
+    data: LessonUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Update a lesson's title, content cards, or sequence order."""
+    res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+    lesson = res.scalars().first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    if data.sequence_order is not None:
+        lesson.sequence_order = data.sequence_order
+    if data.title is not None:
+        lesson.title = data.title
+    if data.description is not None:
+        lesson.description = data.description
+    if data.learning_goal is not None:
+        lesson.learning_goal = data.learning_goal
+    if data.estimated_minutes is not None:
+        lesson.estimated_minutes = data.estimated_minutes
+    if data.cards_data is not None:
+        lesson.cards_data = data.cards_data
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_LESSON_UPDATED",
+        description=f"{admin.full_name} updated lesson #{lesson_id}: {lesson.title}"
+    ))
+    await db.commit()
+    await db.refresh(lesson)
+
+    return CurriculumLessonItem(
+        lesson_id=lesson.id, path_id=lesson.path_id,
+        sequence_order=lesson.sequence_order, title=lesson.title,
+        description=lesson.description, learning_goal=lesson.learning_goal,
+        estimated_minutes=lesson.estimated_minutes or 5,
+        cards_data=lesson.cards_data if isinstance(lesson.cards_data, list) else [],
+    )
+
+
+@router.delete("/curriculum/lessons/{lesson_id}", response_model=MessageResponse)
+async def delete_curriculum_lesson(
+    lesson_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Delete a specific lesson. Progress records for this lesson are also removed."""
+    res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+    lesson = res.scalars().first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    lesson_title = lesson.title
+    path_id = lesson.path_id
+
+    # Clean up progress
+    await db.execute(
+        UserLessonProgress.__table__.delete().where(UserLessonProgress.lesson_id == lesson_id)
+    )
+    await db.delete(lesson)
+
+    # Update path totals
+    if path_id:
+        remaining_res = await db.execute(select(Lesson).filter(Lesson.path_id == path_id))
+        remaining = remaining_res.scalars().all()
+        path_res = await db.execute(select(LearningPath).filter(LearningPath.id == path_id))
+        path = path_res.scalars().first()
+        if path:
+            path.total_lessons = len(remaining)
+            path.total_minutes = sum(l.estimated_minutes or 5 for l in remaining)
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_LESSON_DELETED",
+        description=f"{admin.full_name} deleted lesson '{lesson_title}'"
+    ))
+    await db.commit()
+    return {"message": f"Lesson '{lesson_title}' has been deleted."}

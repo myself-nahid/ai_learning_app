@@ -450,6 +450,8 @@ def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> Li
                 continue
 
             if card.get("cardType"):
+                # Curriculum cards (intro/concept/example/takeaway) — pass through as-is.
+                # Ensure every card has an id.
                 normalized_cards.append({**card, "id": card.get("id") or f"card_{index}"})
                 continue
 
@@ -468,15 +470,34 @@ def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> Li
                     "bodyText": body_text,
                     "imageUrl": image_url,
                 })
+            elif card_type == "concept":
+                # "How Does It Work?" — plain prose, may contain Step N: lines
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "concept",
+                    "title": card.get("title") or content_dict.get("title") or "How Does It Work?",
+                    "bodyText": card.get("bodyText") or content_dict.get("text") or (str(content) if isinstance(content, str) else ""),
+                })
+            elif card_type == "takeaway":
+                # "What Should I Remember?" — bullet prose
+                normalized_cards.append({
+                    "id": f"card_{index}",
+                    "cardType": "takeaway",
+                    "title": card.get("title") or content_dict.get("title") or "What Should I Remember?",
+                    "bodyText": card.get("bodyText") or content_dict.get("text") or (str(content) if isinstance(content, str) else ""),
+                })
             elif card_type == "example":
+                # Curriculum-style: bodyText + optional practiceExercise
+                body = card.get("bodyText") or content_dict.get("text") or (str(content) if isinstance(content, str) else "")
+                example_data_raw = card.get("exampleData") or content_dict.get("exampleData") or {}
+                practice = example_data_raw.get("practiceExercise") or content_dict.get("practiceExercise") or ""
                 normalized_cards.append({
                     "id": f"card_{index}",
                     "cardType": "example",
-                    "title": content_dict.get("heading") or card.get("title") or "Example",
+                    "title": card.get("title") or content_dict.get("heading") or "Real Example / Practice Exercise",
+                    "bodyText": body,
                     "exampleData": {
-                        "promptPrefix": content_dict.get("promptPrefix") or content_dict.get("prompt") or "Input prompt",
-                        "predictionWord": content_dict.get("predictionWord") or content_dict.get("answer") or "Output prediction",
-                        "noteText": content_dict.get("noteText") or content_dict.get("text") or (str(content) if isinstance(content, str) else ""),
+                        "practiceExercise": practice,
                     },
                 })
             elif card_type == "comparison":

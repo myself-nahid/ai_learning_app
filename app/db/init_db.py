@@ -795,9 +795,23 @@ async def seed_learning_paths_from_curriculum():
 async def init_db():
     """
     Run schema column checks and seed initial admin, app settings, and curriculum data.
+
+    Learning Feed content is seeded directly from the Excel curriculum file
+    (TodAI_Lessons_1-98 Optimized.xlsx).  The AiTopicCurriculum table is kept
+    for the News Feed AI generation pipeline only — it is NOT the source for the
+    Learning Feed.
     """
     await ensure_db_columns()
     await seed_admin_user()
     await seed_app_settings()
     await seed_curriculum()
+
+    # Seed Learning Feed from the Excel curriculum (authoritative source)
+    try:
+        from app.db.seed_excel_curriculum import seed_excel_learning_paths
+        from app.db.session import SessionLocal
+        await seed_excel_learning_paths(SessionLocal)
+    except Exception as e:
+        logger.warning("Excel curriculum seeding skipped: %s", e)
+
     logger.info("Database initialization check complete.")

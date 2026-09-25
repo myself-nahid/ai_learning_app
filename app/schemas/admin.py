@@ -94,3 +94,128 @@ class AppSettingsUpdate(BaseModel):
     privacy_policy: Optional[str] = None
     terms_conditions: Optional[str] = None
     account_deletion_policy: Optional[str] = None
+
+
+# ── CURRICULUM MANAGEMENT SCHEMAS ──────────────────────────────────────────
+
+class CurriculumLessonItem(BaseModel):
+    lesson_id: int
+    path_id: int
+    sequence_order: int
+    title: str
+    description: Optional[str] = None
+    learning_goal: Optional[str] = None
+    estimated_minutes: int
+    cards_data: List[dict]
+
+
+class CurriculumPathItem(BaseModel):
+    path_id: int
+    title: str
+    description: Optional[str] = None
+    level: str
+    total_lessons: int
+    total_minutes: int
+    curriculum_slug: Optional[str] = None
+    lessons: List[CurriculumLessonItem]
+
+
+class CurriculumListResponse(BaseModel):
+    total_paths: int
+    total_lessons: int
+    paths: List[CurriculumPathItem]
+
+
+class LessonCreateRequest(BaseModel):
+    path_id: int
+    sequence_order: int
+    title: str
+    description: Optional[str] = None
+    learning_goal: Optional[str] = None
+    estimated_minutes: int = 5
+    cards_data: List[dict]
+
+
+class LessonUpdateRequest(BaseModel):
+    sequence_order: Optional[int] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    learning_goal: Optional[str] = None
+    estimated_minutes: Optional[int] = None
+    cards_data: Optional[List[dict]] = None
+
+
+class PathCreateRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    level: str = "Beginner"
+
+
+class PathUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    level: Optional[str] = None
+
+
+class CurriculumImportResponse(BaseModel):
+    message: str
+    paths_upserted: int
+    lessons_upserted: int
+
+
+# ── AI TOPIC CURRICULUM (CONTENT REVIEW) SCHEMAS ─────────────────────────
+
+class AiTopicCreate(BaseModel):
+    """Payload for creating a new AI curriculum topic."""
+    slug: str
+    title: str
+    description: str
+    level: str
+    category: str
+    sequence_order: int
+    search_keywords: List[str] = []
+    learning_objectives: List[str] = []
+    is_active: bool = True
+
+
+class AiTopicUpdate(BaseModel):
+    """Payload for fully editing an existing AI curriculum topic.
+    All fields optional; None means "leave unchanged"."""
+    slug: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    level: Optional[str] = None
+    category: Optional[str] = None
+    sequence_order: Optional[int] = None
+    search_keywords: Optional[List[str]] = None
+    learning_objectives: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+class AiTopicDetailResponse(BaseModel):
+    """Full topic detail (every editable field) for the admin content review UI."""
+    id: int
+    slug: str
+    title: str
+    description: str
+    level: str
+    category: str
+    sequence_order: int
+    search_keywords: List[str]
+    learning_objectives: List[str]
+    is_active: bool
+    created_at: Optional[str] = None
+    coverage: Optional[dict] = None
+    learning_path_id: Optional[int] = None
+
+
+class AiTopicActionResponse(BaseModel):
+    """Response after create/update/delete/toggle on an AI curriculum topic."""
+    message: str
+    id: Optional[int] = None
+    slug: Optional[str] = None
+    title: Optional[str] = None
+    is_active: Optional[bool] = None
+    deleted: Optional[bool] = None
+    deleted_progress_rows: Optional[int] = None
+    deleted_learning_path: Optional[bool] = None

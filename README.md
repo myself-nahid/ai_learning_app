@@ -84,6 +84,9 @@ REDIS_URL=redis://localhost:6379/0
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+.\.venv\Scripts\uvicorn.exe app.main:app --host 0.0.0.0 --port 8000 --reload
+
 ```
 
 4. Visit API docs at `http://localhost:8000/docs`.
