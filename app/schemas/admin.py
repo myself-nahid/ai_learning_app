@@ -106,7 +106,10 @@ class CurriculumLessonItem(BaseModel):
     description: Optional[str] = None
     learning_goal: Optional[str] = None
     estimated_minutes: int
-    cards_data: List[dict]
+    cards_data: List[dict] = []
+    # Number of cards on this lesson. Always present; lets the admin list view
+    # stay light (cards_data empty) without extra round-trips.
+    card_count: int = 0
 
 
 class CurriculumPathItem(BaseModel):
@@ -124,6 +127,21 @@ class CurriculumListResponse(BaseModel):
     total_paths: int
     total_lessons: int
     paths: List[CurriculumPathItem]
+    # Server-side pagination over blocks (page_size=0 means "all")
+    page: int = 1
+    page_size: int = 0
+    total_pages: int = 1
+
+
+class PathBulkDeleteRequest(BaseModel):
+    """Delete many curriculum blocks at once (lessons + progress removed)."""
+    path_ids: List[int]
+
+
+class PathBulkDeleteResponse(BaseModel):
+    message: str
+    deleted_count: int
+    deleted_lessons: int
 
 
 class LessonCreateRequest(BaseModel):
@@ -143,6 +161,16 @@ class LessonUpdateRequest(BaseModel):
     learning_goal: Optional[str] = None
     estimated_minutes: Optional[int] = None
     cards_data: Optional[List[dict]] = None
+
+
+class LessonBulkDeleteRequest(BaseModel):
+    """Delete many lessons at once (with per-lesson progress cleanup)."""
+    lesson_ids: List[int]
+
+
+class LessonBulkDeleteResponse(BaseModel):
+    message: str
+    deleted_count: int
 
 
 class LessonReorderItem(BaseModel):

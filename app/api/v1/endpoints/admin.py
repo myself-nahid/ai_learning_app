@@ -1,5 +1,5 @@
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore [missing-import]
@@ -7,6 +7,7 @@ from sqlalchemy import select
 # pyrefly: ignore [missing-import]
 from sqlalchemy import func, desc, or_, text
 from datetime import datetime, timedelta
+from typing import Optional, List
 
 # pyrefly: ignore [missing-import]
 from sqlalchemy.orm import selectinload
@@ -22,7 +23,9 @@ from app.schemas.admin import (
     KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest,
     CurriculumListResponse, CurriculumPathItem, CurriculumLessonItem,
     LessonCreateRequest, LessonUpdateRequest,
+    LessonBulkDeleteRequest, LessonBulkDeleteResponse,
     LessonReorderRequest,
+    PathBulkDeleteRequest, PathBulkDeleteResponse,
     PathCreateRequest, PathUpdateRequest, CurriculumImportResponse,
 )
 from app.schemas.response import ImageUploadResponse, MessageResponse, SuspendActionResponse
@@ -615,41 +618,129 @@ async def update_app_settings(
 
 # ── CURRICULUM MANAGEMENT ──────────────────────────────────────────────────
 
+# Excel blocks are the authoritative curriculum; keep them FIRST regardless of
+# id ordering so admin-created blocks appear after the predefined content.
+_EXCEL_SLUG_PREFIX = "excel-block-"
+
+
+def _serialize_lesson(
+    l: Lesson,
+    *,
+    include_cards: bool,
+) -> CurriculumLessonItem:
+    cards = l.cards_data if isinstance(l.cards_data, list) else []
+    return CurriculumLessonItem(
+        lesson_id=l.id,
+        path_id=l.path_id,
+        sequence_order=l.sequence_order,
+        title=l.title,
+        description=l.description,
+        learning_goal=l.learning_goal,
+        estimated_minutes=l.estimated_minutes or 5,
+        cards_data=cards if include_cards else [],
+        card_count=len(cards),
+    )
+
+
+def _serialize_path(
+    p: LearningPath,
+    *,
+    include_cards: bool,
+) -> CurriculumPathItem:
+    sorted_lessons = sorted(p.lessons or [], key=lambda l: l.sequence_order)
+    lesson_items = [
+        _serialize_lesson(l, include_cards=include_cards) for l in sorted_lessons
+    ]
+    return CurriculumPathItem(
+        path_id=p.id,
+        title=p.title,
+        description=p.description,
+        level=p.level or "Beginner",
+        total_lessons=len(lesson_items),
+        total_minutes=sum(l.estimated_minutes or 5 for l in sorted_lessons),
+        curriculum_slug=p.curriculum_slug,
+        lessons=lesson_items,
+    )
+
+
+def _path_sort_key(p: LearningPath):
+    """Excel blocks first (block-number order), then admin-created blocks."""
+    slug = p.curriculum_slug or ""
+    if slug.startswith(_EXCEL_SLUG_PREFIX):
+        try:
+            return (0, int(slug[len(_EXCEL_SLUG_PREFIX):]), p.id)
+        except ValueError:
+            return (0, 9999, p.id)
+    return (1, 0, p.id)
+
+
 @router.get("/curriculum", response_model=CurriculumListResponse)
 async def get_curriculum(
     db: AsyncSession = Depends(get_db),
+    level: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    include_cards: bool = Query(False, description="Include full card bodies (heavy)"),
+    page: int = Query(1, ge=1, description="1-based page number"),
+    page_size: int = Query(0, ge=0, description="Blocks per page; 0 = all"),
     _admin: User = Depends(get_current_admin),
 ):
     """
-    List all curriculum LearningPaths with their Lessons.
-    Ordered by LearningPath.id (i.e., block order) then Lesson.sequence_order.
+    List curriculum LearningPaths with their Lessons.
+
+    By default the response is LIGHT: cards_data is empty and only card_count
+    is returned (the full 98-lesson payload with card text is ~1MB). Pass
+    include_cards=true only when card bodies are actually needed.
+
+    Filters: level (Beginner/Intermediate/Advanced), search (lesson title /
+    sequence number). Excel blocks are always listed first.
     """
     paths_res = await db.execute(
         select(LearningPath)
         .options(selectinload(LearningPath.lessons))
         .filter(LearningPath.source_type == "curriculum")
-        .order_by(LearningPath.id)
     )
-    paths = paths_res.scalars().all()
+    paths = list(paths_res.scalars().all())
+    paths.sort(key=_path_sort_key)
 
-    path_items = []
-    total_lessons = 0
+    if level and level != "All":
+        paths = [p for p in paths if (p.level or "Beginner") == level]
+
+    search_q = (search or "").strip().lower()
+
+    # Apply the search filter first so totals reflect EVERYTHING that matches.
+    filtered = []
     for p in paths:
         sorted_lessons = sorted(p.lessons or [], key=lambda l: l.sequence_order)
+        if search_q:
+            sorted_lessons = [
+                l for l in sorted_lessons
+                if search_q in (l.title or "").lower()
+                or search_q == str(l.sequence_order)
+                or search_q in (l.learning_goal or "").lower()
+            ]
+            if not sorted_lessons and search_q not in (p.title or "").lower():
+                continue
+        filtered.append((p, sorted_lessons))
+
+    total_paths = len(filtered)
+    total_lessons = sum(len(ls) for _, ls in filtered)
+
+    # Dynamic server-side pagination over the BLOCKS (page_size 0 = all).
+    if page_size and page_size > 0:
+        total_pages = (total_paths + page_size - 1) // page_size
+        page = min(page, max(1, total_pages))
+        offset = (page - 1) * page_size
+        page_slice = filtered[offset: offset + page_size]
+    else:
+        total_pages = 1
+        page = 1
+        page_slice = filtered
+
+    path_items = []
+    for p, sorted_lessons in page_slice:
         lesson_items = [
-            CurriculumLessonItem(
-                lesson_id=l.id,
-                path_id=p.id,
-                sequence_order=l.sequence_order,
-                title=l.title,
-                description=l.description,
-                learning_goal=l.learning_goal,
-                estimated_minutes=l.estimated_minutes or 5,
-                cards_data=l.cards_data if isinstance(l.cards_data, list) else [],
-            )
-            for l in sorted_lessons
+            _serialize_lesson(l, include_cards=include_cards) for l in sorted_lessons
         ]
-        total_lessons += len(lesson_items)
         path_items.append(
             CurriculumPathItem(
                 path_id=p.id,
@@ -664,9 +755,156 @@ async def get_curriculum(
         )
 
     return CurriculumListResponse(
-        total_paths=len(path_items),
+        total_paths=total_paths,
         total_lessons=total_lessons,
         paths=path_items,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
+@router.get("/curriculum/lessons/{lesson_id}", response_model=CurriculumLessonItem)
+async def get_curriculum_lesson_detail(
+    lesson_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """Full single lesson (with card bodies) for the admin card editor."""
+    res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+    lesson = res.scalars().first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    return _serialize_lesson(lesson, include_cards=True)
+
+
+@router.post("/curriculum/lessons/delete-bulk", response_model=LessonBulkDeleteResponse)
+async def bulk_delete_curriculum_lessons(
+    data: LessonBulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Delete many lessons at once. Progress rows are removed and each affected
+    path's remaining lessons are re-sequenced 1..N (no gaps for the app's
+    unlock logic). Path totals are recomputed.
+    """
+    if not data.lesson_ids:
+        raise HTTPException(status_code=400, detail="lesson_ids must not be empty")
+
+    res = await db.execute(select(Lesson).filter(Lesson.id.in_(data.lesson_ids)))
+    lessons = res.scalars().all()
+    if not lessons:
+        raise HTTPException(status_code=404, detail="No matching lessons found")
+
+    affected_path_ids = {l.path_id for l in lessons if l.path_id}
+
+    await db.execute(
+        UserLessonProgress.__table__.delete().where(
+            UserLessonProgress.lesson_id.in_(data.lesson_ids)
+        )
+    )
+    for l in lessons:
+        await db.delete(l)
+
+    # Re-sequence remaining lessons per affected path + recompute totals.
+    for path_id in affected_path_ids:
+        rem_res = await db.execute(
+            select(Lesson)
+            .filter(Lesson.path_id == path_id)
+            .order_by(Lesson.sequence_order)
+        )
+        remaining = list(rem_res.scalars().all())
+        for idx, les in enumerate(remaining, start=1):
+            les.sequence_order = idx
+        path_res = await db.execute(
+            select(LearningPath).filter(LearningPath.id == path_id)
+        )
+        path = path_res.scalars().first()
+        if path:
+            path.total_lessons = len(remaining)
+            path.total_minutes = sum(l.estimated_minutes or 5 for l in remaining)
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_LESSON_BULK_DELETED",
+        description=(
+            f"{admin.full_name} deleted {len(lessons)} lessons "
+            f"(ids: {data.lesson_ids[:20]})"
+        )
+    ))
+    await db.commit()
+
+    return LessonBulkDeleteResponse(
+        message=f"Deleted {len(lessons)} lesson(s).",
+        deleted_count=len(lessons),
+    )
+
+
+@router.post("/curriculum/upload-excel", response_model=CurriculumImportResponse)
+async def upload_excel_curriculum(
+    files: List[UploadFile] = File(..., description="One or more .xlsx curriculum files"),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Upload one or more Excel curriculum files (same 11-column layout as the
+    original TodAI_Lessons_1-98 Optimized.xlsx) and upsert their blocks and
+    lessons. Blocks are matched by block number (slug excel-block-{n}) and
+    lessons by lesson number, so re-uploading an updated file refreshes the
+    existing content instead of duplicating it.
+    """
+    from app.services.excel_import_service import (
+        parse_uploaded_workbook,
+        upsert_lessons,
+    )
+    from app.db.session import SessionLocal
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    all_lessons = []
+    file_summaries = []
+    for f in files:
+        content = await f.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"File '{f.filename}' is empty.")
+        if f.filename and not f.filename.lower().endswith((".xlsx", ".xlsm")):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{f.filename}' is not an .xlsx workbook.",
+            )
+        try:
+            parsed = parse_uploaded_workbook(content)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        all_lessons.extend(parsed)
+        file_summaries.append(f"{f.filename}: {len(parsed)} lessons")
+
+    if not all_lessons:
+        raise HTTPException(status_code=422, detail="No lesson rows found in the uploaded files.")
+
+    # Upsert in its own session (mirrors import-excel behavior).
+    async with SessionLocal() as import_db:
+        summary = await upsert_lessons(import_db, all_lessons)
+        await import_db.commit()
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_EXCEL_UPLOADED",
+        description=(
+            f"{admin.full_name} uploaded {len(files)} Excel file(s) — "
+            f"{'; '.join(file_summaries)} — "
+            f"blocks: {summary['blocks']}, lessons upserted: {summary['lessons_upserted']}"
+        )
+    ))
+    await db.commit()
+
+    return CurriculumImportResponse(
+        message=(
+            f"Imported {len(files)} file(s): {summary['blocks']} block(s), "
+            f"{summary['lessons_upserted']} lesson(s) upserted."
+        ),
+        paths_upserted=summary["paths_upserted"] or summary["blocks"],
+        lessons_upserted=summary["lessons_upserted"],
     )
 
 
@@ -841,6 +1079,58 @@ async def delete_curriculum_path(
     ))
     await db.commit()
     return {"message": f"Path '{path_title}' and all its lessons have been deleted."}
+
+
+@router.post("/curriculum/paths/delete-bulk", response_model=PathBulkDeleteResponse)
+async def bulk_delete_curriculum_paths(
+    data: PathBulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Delete many curriculum blocks at once. Every block's lessons and all
+    related user lesson progress rows are removed as well.
+    """
+    if not data.path_ids:
+        raise HTTPException(status_code=400, detail="path_ids must not be empty")
+
+    res = await db.execute(
+        select(LearningPath).filter(LearningPath.id.in_(data.path_ids))
+    )
+    targets = res.scalars().all()
+    if not targets:
+        raise HTTPException(status_code=404, detail="No matching paths found")
+
+    deleted_lessons = 0
+    titles = []
+    for path in targets:
+        lessons_res = await db.execute(select(Lesson).filter(Lesson.path_id == path.id))
+        path_lessons = lessons_res.scalars().all()
+        deleted_lessons += len(path_lessons)
+        titles.append(path.title)
+
+        await db.execute(
+            UserLessonProgress.__table__.delete().where(
+                UserLessonProgress.path_id == path.id
+            )
+        )
+        await db.execute(Lesson.__table__.delete().where(Lesson.path_id == path.id))
+        await db.delete(path)
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_PATH_BULK_DELETED",
+        description=(
+            f"{admin.full_name} deleted {len(targets)} block(s) "
+            f"({deleted_lessons} lessons): {', '.join(titles[:5])}"
+        )
+    ))
+    await db.commit()
+
+    return PathBulkDeleteResponse(
+        message=f"Deleted {len(targets)} block(s) and {deleted_lessons} lesson(s).",
+        deleted_count=len(targets),
+        deleted_lessons=deleted_lessons,
+    )
 
 
 @router.post("/curriculum/lessons", response_model=CurriculumLessonItem)
@@ -1040,48 +1330,21 @@ async def reorder_curriculum_lessons(
     ))
     await db.commit()
 
-    # Return the full refreshed curriculum so the UI can drop its cache in one shot.
+    # Return the refreshed LIGHT curriculum (no card bodies) so the UI list
+    # stays cheap; the editor refetches card bodies per lesson on demand.
     paths_res = await db.execute(
         select(LearningPath)
         .options(selectinload(LearningPath.lessons))
         .filter(LearningPath.source_type == "curriculum")
-        .order_by(LearningPath.id)
     )
-    paths = paths_res.scalars().all()
+    paths = list(paths_res.scalars().all())
+    paths.sort(key=_path_sort_key)
 
-    path_items = []
-    total_lessons = 0
-    for p in paths:
-        sorted_lessons = sorted(p.lessons or [], key=lambda l: l.sequence_order)
-        lesson_items = [
-            CurriculumLessonItem(
-                lesson_id=l.id,
-                path_id=p.id,
-                sequence_order=l.sequence_order,
-                title=l.title,
-                description=l.description,
-                learning_goal=l.learning_goal,
-                estimated_minutes=l.estimated_minutes or 5,
-                cards_data=l.cards_data if isinstance(l.cards_data, list) else [],
-            )
-            for l in sorted_lessons
-        ]
-        total_lessons += len(lesson_items)
-        path_items.append(
-            CurriculumPathItem(
-                path_id=p.id,
-                title=p.title,
-                description=p.description,
-                level=p.level or "Beginner",
-                total_lessons=len(lesson_items),
-                total_minutes=sum(l.estimated_minutes or 5 for l in sorted_lessons),
-                curriculum_slug=p.curriculum_slug,
-                lessons=lesson_items,
-            )
-        )
+    path_items = [_serialize_path(p, include_cards=False) for p in paths]
+    total_lessons = sum(p.total_lessons for p in path_items)
 
     return CurriculumListResponse(
         total_paths=len(path_items),
         total_lessons=total_lessons,
         paths=path_items,
-    )
+    )
