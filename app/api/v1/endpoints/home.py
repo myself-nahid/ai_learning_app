@@ -16,7 +16,7 @@ from typing import List, Optional
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession, Notification
+from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession, Notification, Lesson
 from app.schemas.home import HomeDashboardResponse, NewsCardResponse, NewsDetailResponse
 from app.schemas.response import (
     BookmarkToggleResponse,
@@ -663,6 +663,28 @@ async def get_todays_lesson(
 ):
     session = await get_or_create_daily_session(db, current_user.id)
 
+    # The worker stores the assigned PREDEFINED CURRICULUM lesson id in
+    # lesson_data (news never generates lesson content). Serve that lesson's
+    # live cards so admin edits show up, keeping day-stable assignment.
+    lesson_id = (session.lesson_data or {}).get("curriculum_lesson_id") if session else None
+    if lesson_id:
+        from app.api.v1.endpoints.learn import _normalize_lesson_cards
+        lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+        lesson = lesson_res.scalars().first()
+        if lesson:
+            cards = _normalize_lesson_cards(lesson.cards_data, lesson.title or "Lesson")
+            takeaway_card = next(
+                (c for c in cards if c.get("cardType") == "takeaway"), None
+            )
+            return {
+                "title": lesson.title,
+                "content_blocks": cards,
+                "practical_takeaway": (
+                    takeaway_card.get("bodyText") if takeaway_card else None
+                ),
+            }
+
+    # Legacy snapshot sessions (or sessions without an assigned lesson)
     if not session or not session.lesson_data:
         raise HTTPException(status_code=404, detail="Today's lesson is not ready.")
 

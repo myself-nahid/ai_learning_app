@@ -128,10 +128,11 @@ async def process_real_daily_pulse_for_all_users():
 
             try:
                 # ── 1. Select next curriculum topic ──────────────────────────
+                user_level = user.profile.ai_level or "Beginner"
                 topic = await _select_next_topic(
                     db=db,
                     user_id=user.id,
-                    user_level=user.profile.ai_level or "Beginner",
+                    user_level=user_level,
                     user_interests=user.profile.interests or [],
                 )
 
@@ -219,7 +220,7 @@ async def process_real_daily_pulse_for_all_users():
                     completed_lesson_ids = {r[0] for r in completed_ids_res.fetchall()}
 
                     curriculum_lessons_res = await db.execute(
-                        select(Lesson)
+                        select(Lesson, LearningPath.level)
                         .join(LearningPath, Lesson.path_id == LearningPath.id)
                         .where(
                             LearningPath.source_type == "curriculum",
@@ -227,7 +228,20 @@ async def process_real_daily_pulse_for_all_users():
                         )
                         .order_by(LearningPath.id, Lesson.sequence_order)
                     )
-                    for candidate in curriculum_lessons_res.scalars().all():
+                    # Level-aware ordering: the user's own band first, then
+                    # easier bands (revision), then harder ones — an
+                    # Intermediate user should not be served Beginner lessons
+                    # just because they come first by block id.
+                    level_order = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
+                    _user_rank = level_order.get(user_level, 1)
+
+                    def _cand_key(row):
+                        _lesson, _lvl = row
+                        _lrank = level_order.get(_lvl or "Beginner", 1)
+                        band = 0 if _lrank == _user_rank else (1 if _lrank < _user_rank else 2)
+                        return (band, _lrank, _lesson.path_id, _lesson.sequence_order)
+
+                    for candidate, _lvl in sorted(curriculum_lessons_res.all(), key=_cand_key):
                         if candidate.id not in completed_lesson_ids:
                             curriculum_lesson = candidate
                             break

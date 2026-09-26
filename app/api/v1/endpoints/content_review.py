@@ -103,13 +103,17 @@ async def _materialize_learning_feed(topic: AiTopicCurriculum, db: AsyncSession)
             level=topic.level,
             total_lessons=1,
             total_minutes=5,
-            source_type="curriculum",
+            # Topic-derived content feeds the Daily Pulse pipeline, NOT the
+            # predefined Learning Feed. source_type="news" keeps it out of
+            # /learn/dashboard, the daily lesson assignment, and the admin
+            # Excel lesson editor (all filter source_type == "curriculum").
+            source_type="news",
             curriculum_slug=topic.slug,
         )
         db.add(path)
         await db.flush()
     else:
-        path.source_type = "curriculum"
+        path.source_type = "news"
         path.title = topic.title
         path.description = topic.description
         path.level = topic.level
@@ -141,11 +145,16 @@ async def _materialize_learning_feed(topic: AiTopicCurriculum, db: AsyncSession)
 
 
 async def _delete_learning_feed(path_id: int, db: AsyncSession) -> bool:
-    """Delete a curriculum-sourced Learning Feed path, its lessons, and lesson progress."""
+    """Delete a topic-sourced path, its lessons, and lesson progress.
+
+    Matches by id only (no source_type filter): topic paths used to be
+    materialized with source_type="curriculum" before the separation fix,
+    and those legacy rows must still be deletable.
+    """
     await db.execute(sa_delete(UserLessonProgress).where(UserLessonProgress.path_id == path_id))
     await db.execute(sa_delete(Lesson).where(Lesson.path_id == path_id))
     result = await db.execute(sa_delete(LearningPath).where(
-        LearningPath.id == path_id, LearningPath.source_type == "curriculum"
+        LearningPath.id == path_id
     ))
     return (result.rowcount or 0) > 0
 
@@ -674,11 +683,11 @@ async def delete_topic(
     progress_count = progress_count_result.scalar() or 0
     await db.execute(sa_delete(UserConceptProgress).where(UserConceptProgress.topic_id == topic_id))
 
-    # 2. Remove the materialized Learning Feed path/lessons for this slug
+    # 2. Remove the materialized path/lessons for this slug (any source_type:
+    # legacy topic paths may carry "curriculum" from before the separation fix)
     path_id_result = await db.execute(
         select(LearningPath.id).where(
             LearningPath.curriculum_slug == topic.slug,
-            LearningPath.source_type == "curriculum",
         )
     )
     path_id = path_id_result.scalars().first()

@@ -14,7 +14,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, LearningPath, Lesson, UserLessonProgress, WeeklyActivity, NewsArticle
+from app.db.models import User, UserProfile, LearningPath, Lesson, UserLessonProgress, WeeklyActivity, NewsArticle
 from app.services.session_service import get_or_create_daily_session
 from app.schemas.learn import (
     LearnDashboardResponse, PathDetailResponse, LessonContentResponse
@@ -781,6 +781,21 @@ async def get_learn_dashboard(
     )
     paths = paths_res.scalars().all()
 
+    # Excel curriculum blocks carry their level on the path. Prefer the user's
+    # own level band first, then the easier bands, then the harder ones, so an
+    # Intermediate user is never greeted with only Beginner blocks.
+    level_res = await db.execute(
+        select(UserProfile.ai_level).where(UserProfile.user_id == current_user.id)
+    )
+    user_level = (level_res.scalar() or "Beginner") or "Beginner"
+    level_rank = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
+    user_rank = level_rank.get(user_level, 1)
+
+    def _block_sort_key(p: LearningPath):
+        return (level_rank.get(p.level or "", 1) < user_rank, level_rank.get(p.level or "", 1), p.id)
+
+    paths = sorted(paths, key=_block_sort_key)
+
     # Get all user progress records at once
     all_prog_res = await db.execute(
         select(UserLessonProgress).filter(UserLessonProgress.user_id == current_user.id)
@@ -816,6 +831,8 @@ async def get_learn_dashboard(
     # Priority 2: First available uncompleted lesson from the curriculum.
     if not continue_learning:
         for p in paths:
+            if not p.lessons:
+                continue
             sorted_les = sorted(p.lessons, key=lambda x: x.sequence_order)
             for les in sorted_les:
                 if les.id not in completed_lesson_ids:
@@ -886,6 +903,7 @@ async def get_learn_dashboard(
         sorted_p_lessons = sorted(p.lessons, key=lambda x: x.sequence_order)
         if not sorted_p_lessons:
             continue
+
 
         # Choose the single next uncompleted unlocked lesson in this path
         target_lesson = None

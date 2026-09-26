@@ -762,13 +762,15 @@ async def seed_learning_paths_from_curriculum():
                     level=topic.level,
                     total_lessons=1,
                     total_minutes=5,
-                    source_type="curriculum",
+                    source_type="news",
                     curriculum_slug=topic.slug,
                 )
                 db.add(path)
                 await db.flush()
             else:
-                path.source_type = "curriculum"
+                # Topic-derived content feeds the Daily Pulse pipeline, NOT the
+                # predefined Learning Feed (see _materialize_learning_feed).
+                path.source_type = "news"
                 path.title = topic.title
                 path.description = topic.description
                 path.level = topic.level
@@ -813,5 +815,32 @@ async def init_db():
         await seed_excel_learning_paths(SessionLocal)
     except Exception as e:
         logger.warning("Excel curriculum seeding skipped: %s", e)
+
+    # One-time heal: topic-materialized paths were historically created with
+    # source_type="curriculum", which leaked headline-like topics into the
+    # Learning Feed, the daily lesson assignment, and the admin lesson editor.
+    # True Excel blocks always have the slug prefix "excel-block-".
+    try:
+        from sqlalchemy import update
+        from app.db.models import LearningPath as _LP
+        from app.db.session import SessionLocal as _SL
+        async with _SL() as db:
+            res = await db.execute(
+                update(_LP)
+                .where(
+                    _LP.source_type == "curriculum",
+                    _LP.curriculum_slug.isnot(None),
+                    ~_LP.curriculum_slug.like("excel-block-%"),
+                )
+                .values(source_type="news")
+            )
+            await db.commit()
+            if res.rowcount:
+                logger.info(
+                    "Reclassified %d legacy topic paths to source_type='news'.",
+                    res.rowcount,
+                )
+    except Exception as e:
+        logger.warning("Legacy topic-path reclassification skipped: %s", e)
 
     logger.info("Database initialization check complete.")
