@@ -145,6 +145,17 @@ class LessonUpdateRequest(BaseModel):
     cards_data: Optional[List[dict]] = None
 
 
+class LessonReorderItem(BaseModel):
+    lesson_id: int
+    sequence_order: int
+
+
+class LessonReorderRequest(BaseModel):
+    """Atomically reorder all lessons of one path in a single transaction."""
+    path_id: int
+    orders: List[LessonReorderItem]
+
+
 class PathCreateRequest(BaseModel):
     title: str
     description: Optional[str] = None

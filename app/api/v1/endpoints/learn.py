@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, date
 import math
 import json
 import random
+import re
 from typing import Any, Dict, List, Optional
 
 from app.api.deps import get_db, get_current_user
@@ -453,9 +454,36 @@ def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> Li
                 continue
 
             if card.get("cardType"):
+                card = {**card, "id": card.get("id") or f"card_{index}"}
+
+                # Curriculum example card: the Excel seeder merges the real
+                # example and the practice exercise into bodyText with a
+                # "--- **Practice Exercise**" separator. The runner renders
+                # exampleData.practiceExercise as its own teal box, so split
+                # the merged text once, here, instead of storing it merged.
+                if card.get("cardType") == "example":
+                    example_data = dict(card.get("exampleData") or {})
+                    practice = str(example_data.get("practiceExercise") or "")
+                    body = str(card.get("bodyText") or "")
+                    marker = "**Practice Exercise**"
+                    marker_idx = body.find(marker)
+                    if marker_idx != -1:
+                        head = body[:marker_idx]
+                        # Drop the horizontal-rule line (---) just before the marker.
+                        head = re.sub(r"-{3,}\s*$", "", head).strip()
+                        tail = body[marker_idx + len(marker):]
+                        # Drop a leading horizontal-rule line (---) after the marker.
+                        tail = re.sub(r"^\s*\n?-{3,}\s*\n?", "", tail)
+                        if not practice:
+                            practice = tail.strip()
+                        if head:
+                            body = head
+                    example_data["practiceExercise"] = practice
+                    card["bodyText"] = body
+                    card["exampleData"] = example_data
+
                 # Curriculum cards (intro/concept/example/takeaway) — pass through as-is.
-                # Ensure every card has an id.
-                normalized_cards.append({**card, "id": card.get("id") or f"card_{index}"})
+                normalized_cards.append(card)
                 continue
 
             card_type = str(card.get("type") or card.get("cardType") or "intro").lower()
@@ -802,6 +830,10 @@ async def get_learn_dashboard(
     learning_paths = []
     seen_path_keys = set()
     for p in paths:
+        # Skip empty blocks — an admin may have just created the path and not
+        # added lessons yet; a 0-lesson card would be a dead end in the app.
+        if not p.lessons:
+            continue
         norm_title = p.title.strip().lower()
         key = p.image_url if (p.image_url and not p.image_url.startswith("https://images.unsplash.com")) else norm_title[:30]
         if key in seen_path_keys:
@@ -983,16 +1015,21 @@ async def get_lesson_content(
     lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
     lesson = lesson_res.scalars().first()
 
-    # Guard: prevent accessing locked lessons out of sequence
+    # Guard: prevent accessing locked lessons out of sequence.
+    # Positional lookup (ordered by sequence_order) instead of assuming
+    # sequence_order - 1 exists, so legacy gaps never unlock lessons early.
     if lesson.sequence_order and lesson.sequence_order > 1 and lesson.path_id:
-        prev_lesson_res = await db.execute(
-            select(Lesson).filter(
-                Lesson.path_id == lesson.path_id,
-                Lesson.sequence_order == lesson.sequence_order - 1
-            )
+        siblings_res = await db.execute(
+            select(Lesson)
+            .filter(Lesson.path_id == lesson.path_id)
+            .order_by(Lesson.sequence_order)
         )
-        prev_lesson = prev_lesson_res.scalars().first()
-        if prev_lesson:
+        prev_lesson = None
+        for sib in siblings_res.scalars().all():
+            if sib.id == lesson.id:
+                break
+            prev_lesson = sib
+        if prev_lesson is not None:
             prev_prog_res = await db.execute(
                 select(UserLessonProgress).filter(
                     UserLessonProgress.user_id == current_user.id,

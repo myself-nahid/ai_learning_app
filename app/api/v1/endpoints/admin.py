@@ -22,6 +22,7 @@ from app.schemas.admin import (
     KpiCard, ChartDataPoint, ActivityLogItem, SuspendUserRequest,
     CurriculumListResponse, CurriculumPathItem, CurriculumLessonItem,
     LessonCreateRequest, LessonUpdateRequest,
+    LessonReorderRequest,
     PathCreateRequest, PathUpdateRequest, CurriculumImportResponse,
 )
 from app.schemas.response import ImageUploadResponse, MessageResponse, SuspendActionResponse
@@ -34,6 +35,7 @@ from app.core.security import get_password_hash, verify_password
 from app.services.user_service import validate_image_file
 
 from app.core.config import settings
+import re
 import uuid
 
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
@@ -727,6 +729,20 @@ async def create_curriculum_path(
     admin: User = Depends(get_current_admin),
 ):
     """Create a new curriculum learning path (block)."""
+    # Give the new block a unique slug so the user app's Learning Feed picks
+    # it up: /learn/dashboard only lists paths with curriculum_slug set.
+    base_slug = re.sub(r"[^a-z0-9]+", "-", (data.title or "block").lower()).strip("-") or "block"
+    slug = base_slug
+    suffix = 1
+    while True:
+        dup_res = await db.execute(
+            select(LearningPath).filter(LearningPath.curriculum_slug == slug)
+        )
+        if not dup_res.scalars().first():
+            break
+        suffix += 1
+        slug = f"{base_slug}-{suffix}"
+
     path = LearningPath(
         title=data.title,
         description=data.description or "",
@@ -734,6 +750,7 @@ async def create_curriculum_path(
         total_lessons=0,
         total_minutes=0,
         source_type="curriculum",
+        curriculum_slug=slug,
     )
     db.add(path)
     await db.commit()
@@ -838,9 +855,24 @@ async def create_curriculum_lesson(
     if not path:
         raise HTTPException(status_code=404, detail="Learning path not found")
 
+    # Shift existing lessons to make room for the new one (sequence 1..N, no gaps,
+    # no duplicates — the mobile app unlocks lessons by sequence_order).
+    lessons_res = await db.execute(
+        select(Lesson)
+        .filter(Lesson.path_id == data.path_id)
+        .order_by(Lesson.sequence_order)
+    )
+    siblings = list(lessons_res.scalars().all())
+    target_seq = max(1, data.sequence_order)
+    for l in siblings:
+        if l.sequence_order >= target_seq:
+            l.sequence_order += 1
+    if target_seq > len(siblings) + 1:
+        target_seq = len(siblings) + 1  # append at the end if out of range
+
     lesson = Lesson(
         path_id=data.path_id,
-        sequence_order=data.sequence_order,
+        sequence_order=target_seq,
         title=data.title,
         description=data.description,
         learning_goal=data.learning_goal,
@@ -849,11 +881,9 @@ async def create_curriculum_lesson(
     )
     db.add(lesson)
 
-    # Update path totals
-    lessons_res = await db.execute(select(Lesson).filter(Lesson.path_id == data.path_id))
-    all_lessons = lessons_res.scalars().all()
-    path.total_lessons = len(all_lessons) + 1
-    path.total_minutes = (len(all_lessons) + 1) * data.estimated_minutes
+    # Update path totals (count + real per-lesson minutes)
+    path.total_lessons = len(siblings) + 1
+    path.total_minutes = sum(l.estimated_minutes or 5 for l in siblings) + data.estimated_minutes
 
     db.add(ActivityLog(
         action_type="CURRICULUM_LESSON_CREATED",
@@ -934,10 +964,17 @@ async def delete_curriculum_lesson(
     )
     await db.delete(lesson)
 
-    # Update path totals
+    # Update path totals and re-sequence remaining lessons 1..N in their
+    # current relative order (no gaps — the app unlocks by sequence_order).
     if path_id:
-        remaining_res = await db.execute(select(Lesson).filter(Lesson.path_id == path_id))
-        remaining = remaining_res.scalars().all()
+        remaining_res = await db.execute(
+            select(Lesson)
+            .filter(Lesson.path_id == path_id)
+            .order_by(Lesson.sequence_order)
+        )
+        remaining = list(remaining_res.scalars().all())
+        for idx, l in enumerate(remaining, start=1):
+            l.sequence_order = idx
         path_res = await db.execute(select(LearningPath).filter(LearningPath.id == path_id))
         path = path_res.scalars().first()
         if path:
@@ -949,4 +986,102 @@ async def delete_curriculum_lesson(
         description=f"{admin.full_name} deleted lesson '{lesson_title}'"
     ))
     await db.commit()
-    return {"message": f"Lesson '{lesson_title}' has been deleted."}
+    return {"message": f"Lesson '{lesson_title}' has been deleted."}
+
+
+@router.patch("/curriculum/lessons-reorder", response_model=CurriculumListResponse)
+async def reorder_curriculum_lessons(
+    data: LessonReorderRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Atomically reorder the lessons of one path (single transaction).
+
+    Body: { "path_id": 3, "orders": [{"lesson_id": 41, "sequence_order": 1}, ...] }
+    Every lesson of the path must be included exactly once; sequence_order
+    must be a permutation of 1..N. Applied in two phases so the unique-ish
+    (path_id, sequence_order) pairs never collide mid-update.
+    """
+    path_res = await db.execute(select(LearningPath).filter(LearningPath.id == data.path_id))
+    path = path_res.scalars().first()
+    if not path:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+
+    lessons_res = await db.execute(select(Lesson).filter(Lesson.path_id == data.path_id))
+    lessons = {l.id: l for l in lessons_res.scalars().all()}
+
+    if sorted(item.lesson_id for item in data.orders) != sorted(lessons.keys()):
+        raise HTTPException(
+            status_code=400,
+            detail="orders must contain every lesson of the path exactly once",
+        )
+
+    requested = sorted(item.sequence_order for item in data.orders)
+    if requested != list(range(1, len(data.orders) + 1)):
+        raise HTTPException(
+            status_code=400,
+            detail="sequence_order values must be a permutation of 1..N with no gaps",
+        )
+
+    # Phase 1: move everything to negative temporary positions (no collisions).
+    for item in data.orders:
+        lessons[item.lesson_id].sequence_order = -item.sequence_order
+    await db.flush()
+
+    # Phase 2: set the final positive positions.
+    id_to_order = {item.lesson_id: item.sequence_order for item in data.orders}
+    for lesson_id, order in id_to_order.items():
+        lessons[lesson_id].sequence_order = order
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_LESSONS_REORDERED",
+        description=f"{admin.full_name} reordered {len(data.orders)} lessons in path #{data.path_id}: {path.title}"
+    ))
+    await db.commit()
+
+    # Return the full refreshed curriculum so the UI can drop its cache in one shot.
+    paths_res = await db.execute(
+        select(LearningPath)
+        .options(selectinload(LearningPath.lessons))
+        .filter(LearningPath.source_type == "curriculum")
+        .order_by(LearningPath.id)
+    )
+    paths = paths_res.scalars().all()
+
+    path_items = []
+    total_lessons = 0
+    for p in paths:
+        sorted_lessons = sorted(p.lessons or [], key=lambda l: l.sequence_order)
+        lesson_items = [
+            CurriculumLessonItem(
+                lesson_id=l.id,
+                path_id=p.id,
+                sequence_order=l.sequence_order,
+                title=l.title,
+                description=l.description,
+                learning_goal=l.learning_goal,
+                estimated_minutes=l.estimated_minutes or 5,
+                cards_data=l.cards_data if isinstance(l.cards_data, list) else [],
+            )
+            for l in sorted_lessons
+        ]
+        total_lessons += len(lesson_items)
+        path_items.append(
+            CurriculumPathItem(
+                path_id=p.id,
+                title=p.title,
+                description=p.description,
+                level=p.level or "Beginner",
+                total_lessons=len(lesson_items),
+                total_minutes=sum(l.estimated_minutes or 5 for l in sorted_lessons),
+                curriculum_slug=p.curriculum_slug,
+                lessons=lesson_items,
+            )
+        )
+
+    return CurriculumListResponse(
+        total_paths=len(path_items),
+        total_lessons=total_lessons,
+        paths=path_items,
+    )
