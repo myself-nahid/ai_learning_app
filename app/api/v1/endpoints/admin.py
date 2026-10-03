@@ -13,7 +13,7 @@ from typing import Optional, List
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_admin
-from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress, Lesson, LearningPath, QuizSet, DailyFeed, UserNewsInteraction, WeeklyActivity, Notification
+from app.db.models import OTP, AppSettings, QuizAttempt, User, ActivityLog, DailySession, UserLessonProgress, UserProfile, UserProgress, Lesson, LearningPath, QuizSet, QuizQuestion, DailyFeed, UserNewsInteraction, WeeklyActivity, Notification
 
 
 from app.schemas.admin import (
@@ -27,6 +27,7 @@ from app.schemas.admin import (
     LessonReorderRequest,
     PathBulkDeleteRequest, PathBulkDeleteResponse,
     PathCreateRequest, PathUpdateRequest, CurriculumImportResponse,
+    LessonQuizReplaceRequest, LessonQuizResponse,
 )
 from app.schemas.response import ImageUploadResponse, MessageResponse, SuspendActionResponse
 from app.services.email_service import generate_and_save_otp, send_otp_email
@@ -623,6 +624,12 @@ async def update_app_settings(
 _EXCEL_SLUG_PREFIX = "excel-block-"
 
 
+def _norm_level(v: Optional[str]) -> str:
+    """Normalize a level for comparisons: ' beginner ' -> 'Beginner', None -> ''."""
+    s = (v or "").strip()
+    return s[:1].upper() + s[1:].lower() if s else ""
+
+
 def _serialize_lesson(
     l: Lesson,
     *,
@@ -639,6 +646,7 @@ def _serialize_lesson(
         estimated_minutes=l.estimated_minutes or 5,
         cards_data=cards if include_cards else [],
         card_count=len(cards),
+        quiz_data=(l.quiz_data if isinstance(l.quiz_data, list) else None) if include_cards else None,
     )
 
 
@@ -702,8 +710,18 @@ async def get_curriculum(
     paths = list(paths_res.scalars().all())
     paths.sort(key=_path_sort_key)
 
+    # True per-level totals across ALL curriculum blocks (before filtering) —
+    # the admin UI shows these numbers on the level pills.
+    level_counts = {"Beginner": 0, "Intermediate": 0, "Advanced": 0}
+    for p in paths:
+        lvl = _norm_level(p.level) or "Beginner"
+        level_counts[lvl] = level_counts.get(lvl, 0) + 1
+
+    # Case/whitespace-insensitive level matching so 'beginner ' stored in the DB
+    # still matches the 'Beginner' filter (fixes the zero-count pill bug).
     if level and level != "All":
-        paths = [p for p in paths if (p.level or "Beginner") == level]
+        want = _norm_level(level)
+        paths = [p for p in paths if _norm_level(p.level) == want]
 
     search_q = (search or "").strip().lower()
 
@@ -761,6 +779,7 @@ async def get_curriculum(
         page=page,
         page_size=page_size,
         total_pages=total_pages,
+        level_counts=level_counts,
     )
 
 
@@ -776,6 +795,159 @@ async def get_curriculum_lesson_detail(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
     return _serialize_lesson(lesson, include_cards=True)
+
+
+def _validate_quiz_questions(questions: List[dict]) -> List[dict]:
+    """Validate + normalize an admin-authored quiz. Raises HTTPException(400)."""
+    if not isinstance(questions, list):
+        raise HTTPException(status_code=400, detail="questions must be a list")
+    if len(questions) > 20:
+        raise HTTPException(status_code=400, detail="A quiz can have at most 20 questions")
+    cleaned = []
+    for i, q in enumerate(questions):
+        if not isinstance(q, dict):
+            raise HTTPException(status_code=400, detail=f"Question {i + 1} must be an object")
+        text = str(q.get("question_text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail=f"Question {i + 1}: question text is required")
+        raw_opts = q.get("options")
+        if not isinstance(raw_opts, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Question {i + 1}: options must be an object like {{\"A\": \"...\"}}",
+            )
+        options = {}
+        for key in sorted(raw_opts.keys()):
+            val = str(raw_opts[key] or "").strip()
+            if val:
+                options[str(key).strip().upper()] = val
+        if len(options) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Question {i + 1}: at least 2 non-empty options are required",
+            )
+        correct = str(q.get("correct_option_key") or "").strip().upper()
+        if correct not in options:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Question {i + 1}: correct_option_key must be one of {', '.join(options.keys())}",
+            )
+        entry = {"question_text": text, "options": options, "correct_option_key": correct}
+        explanation = str(q.get("explanation") or "").strip()
+        if explanation:
+            entry["explanation"] = explanation
+        cleaned.append(entry)
+    return cleaned
+
+
+async def _sync_lesson_quiz_set(db: AsyncSession, lesson: Lesson) -> Optional[int]:
+    """Create/update (or remove) the QuizSet linked to a curriculum lesson.
+
+    The linked QuizSet is what the mobile app already knows how to serve,
+    score, and award XP for (POST /quiz-tab/start/{id} etc.).
+    """
+    path_res = await db.execute(select(LearningPath).filter(LearningPath.id == lesson.path_id))
+    path = path_res.scalars().first()
+
+    qs_res = await db.execute(select(QuizSet).filter(QuizSet.curriculum_lesson_id == lesson.id))
+    quiz_set = qs_res.scalars().first()
+
+    questions = lesson.quiz_data if isinstance(lesson.quiz_data, list) else []
+    if not questions:
+        if quiz_set:
+            # Quiz cleared — remove questions + set so the app stops serving it
+            old_q_res = await db.execute(
+                select(QuizQuestion).filter(QuizQuestion.quiz_set_id == quiz_set.id)
+            )
+            for old_q in old_q_res.scalars().all():
+                await db.delete(old_q)
+            await db.delete(quiz_set)
+        return None
+
+    level = (path.level if path else None) or "Beginner"
+    title = f"Lesson Quiz: {(lesson.title or 'Lesson')[:70]}"
+    est_minutes = max(2, int(len(questions) * 1.5))
+    xp_reward = 10 + len(questions) * 2
+
+    if not quiz_set:
+        quiz_set = QuizSet(
+            category="Curriculum",
+            title=title,
+            description=(lesson.learning_goal or f"Check your understanding of '{lesson.title}'.")[:300],
+            level=level,
+            total_questions=len(questions),
+            estimated_minutes=est_minutes,
+            xp_reward=xp_reward,
+            curriculum_lesson_id=lesson.id,
+        )
+        db.add(quiz_set)
+        await db.flush()
+    else:
+        quiz_set.title = title
+        quiz_set.level = level
+        quiz_set.total_questions = len(questions)
+        quiz_set.estimated_minutes = est_minutes
+        quiz_set.xp_reward = xp_reward
+        old_q_res = await db.execute(
+            select(QuizQuestion).filter(QuizQuestion.quiz_set_id == quiz_set.id)
+        )
+        for old_q in old_q_res.scalars().all():
+            await db.delete(old_q)
+        await db.flush()
+
+    for q in questions:
+        db.add(QuizQuestion(
+            quiz_set_id=quiz_set.id,
+            question_text=q["question_text"],
+            options=q["options"],
+            correct_option_key=q["correct_option_key"],
+        ))
+    return quiz_set.id
+
+
+@router.get("/curriculum/lessons/{lesson_id}/quiz")
+async def get_curriculum_lesson_quiz(
+    lesson_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """Authored quiz for one lesson + the QuizSet id it is served through."""
+    lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+    lesson = lesson_res.scalars().first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    qs_res = await db.execute(select(QuizSet).filter(QuizSet.curriculum_lesson_id == lesson_id))
+    quiz_set = qs_res.scalars().first()
+    return {
+        "lesson_id": lesson_id,
+        "quiz_data": lesson.quiz_data if isinstance(lesson.quiz_data, list) else [],
+        "quiz_set_id": quiz_set.id if quiz_set else None,
+    }
+
+
+@router.put("/curriculum/lessons/{lesson_id}/quiz", response_model=LessonQuizResponse)
+async def replace_curriculum_lesson_quiz(
+    lesson_id: int,
+    data: LessonQuizReplaceRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Author/replace the quiz attached to a lesson (empty list clears it)."""
+    lesson_res = await db.execute(select(Lesson).filter(Lesson.id == lesson_id))
+    lesson = lesson_res.scalars().first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    questions = _validate_quiz_questions(data.questions)
+    lesson.quiz_data = questions
+    quiz_set_id = await _sync_lesson_quiz_set(db, lesson)
+
+    db.add(ActivityLog(
+        action_type="CURRICULUM_QUIZ_UPDATED",
+        description=f"{admin.full_name} set {len(questions)} quiz question(s) on lesson '{lesson.title}'"
+    ))
+    await db.commit()
+    return LessonQuizResponse(lesson_id=lesson_id, quiz_count=len(questions), quiz_set_id=quiz_set_id)
 
 
 @router.post("/curriculum/lessons/delete-bulk", response_model=LessonBulkDeleteResponse)

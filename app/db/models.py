@@ -166,7 +166,11 @@ class Lesson(Base):
     
     # JSON array containing all cards (Text, Example, Comparison, List, Quiz)
     cards_data = Column(JSON, nullable=False) 
-    
+
+    # Optional admin-authored quiz for this lesson:
+    # [{question_text, options: {"A": "...", ...}, correct_option_key, explanation?}]
+    quiz_data = Column(JSON, nullable=True)
+
     path = relationship("LearningPath", back_populates="lessons")
 
 # --- USER PROGRESS MODELS ---
@@ -203,7 +207,10 @@ class QuizSet(Base):
     title = Column(String, nullable=False) # e.g., "Sensors and Perception"
     description = Column(String)
     level = Column(String) # e.g., "Beginner"
-    
+
+    # Set when this quiz was authored for a curriculum lesson (admin quiz editor)
+    curriculum_lesson_id = Column(Integer, nullable=True, index=True)
+
     total_questions = Column(Integer, default=10)
     estimated_minutes = Column(Integer, default=5)
     xp_reward = Column(Integer, default=10)

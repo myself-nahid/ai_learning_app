@@ -128,7 +128,8 @@ async def process_real_daily_pulse_for_all_users():
 
             try:
                 # ── 1. Select next curriculum topic ──────────────────────────
-                user_level = user.profile.ai_level or "Beginner"
+                _raw_user_level = (user.profile.ai_level or "").strip()
+                user_level = (_raw_user_level[:1].upper() + _raw_user_level[1:].lower()) or "Beginner"
                 topic = await _select_next_topic(
                     db=db,
                     user_id=user.id,
@@ -237,7 +238,9 @@ async def process_real_daily_pulse_for_all_users():
 
                     def _cand_key(row):
                         _lesson, _lvl = row
-                        _lrank = level_order.get(_lvl or "Beginner", 1)
+                        _lvl_norm = (_lvl or "").strip()
+                        _lvl_norm = (_lvl_norm[:1].upper() + _lvl_norm[1:].lower()) or "Beginner"
+                        _lrank = level_order.get(_lvl_norm, 1)
                         band = 0 if _lrank == _user_rank else (1 if _lrank < _user_rank else 2)
                         return (band, _lrank, _lesson.path_id, _lesson.sequence_order)
 

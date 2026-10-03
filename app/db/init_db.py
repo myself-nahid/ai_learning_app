@@ -35,6 +35,12 @@ async def ensure_db_columns():
         await conn.execute(text(
             "ALTER TABLE daily_sessions ADD COLUMN IF NOT EXISTS curriculum_lesson_id INTEGER"
         ))
+        await conn.execute(text(
+            "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS quiz_data JSONB"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE quiz_sets ADD COLUMN IF NOT EXISTS curriculum_lesson_id INTEGER"
+        ))
     logger.info("Schema columns check complete.")
 
 

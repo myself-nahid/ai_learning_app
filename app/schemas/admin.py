@@ -1,6 +1,6 @@
 # pyrefly: ignore [missing-import]
 from pydantic import BaseModel, EmailStr
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 class KpiCard(BaseModel):
     value: int
@@ -110,6 +110,8 @@ class CurriculumLessonItem(BaseModel):
     # Number of cards on this lesson. Always present; lets the admin list view
     # stay light (cards_data empty) without extra round-trips.
     card_count: int = 0
+    # Only populated on the single-lesson detail endpoint (light list payloads omit it)
+    quiz_data: Optional[List[dict]] = None
 
 
 class CurriculumPathItem(BaseModel):
@@ -131,6 +133,9 @@ class CurriculumListResponse(BaseModel):
     page: int = 1
     page_size: int = 0
     total_pages: int = 1
+    # True per-level totals across ALL curriculum blocks (independent of filters);
+    # the admin UI uses these for the level pill counts.
+    level_counts: Dict[str, int] = {}
 
 
 class PathBulkDeleteRequest(BaseModel):
@@ -258,3 +263,13 @@ class AiTopicActionResponse(BaseModel):
     deleted: Optional[bool] = None
     deleted_progress_rows: Optional[int] = None
     deleted_learning_path: Optional[bool] = None
+
+class LessonQuizReplaceRequest(BaseModel):
+    """Admin-authored quiz for one lesson. Empty list clears the quiz."""
+    questions: List[dict]
+
+
+class LessonQuizResponse(BaseModel):
+    lesson_id: int
+    quiz_count: int
+    quiz_set_id: Optional[int] = None

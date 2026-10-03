@@ -16,7 +16,7 @@ from typing import List, Optional
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession, Notification, Lesson
+from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession, Notification, Lesson, QuizSet
 from app.schemas.home import HomeDashboardResponse, NewsCardResponse, NewsDetailResponse
 from app.schemas.response import (
     BookmarkToggleResponse,
@@ -145,7 +145,28 @@ async def get_home_dashboard(
                 filter_conditions.append(NewsArticle.tag.icontains(interest))
             query = query.filter(or_(*filter_conditions))
     elif category_tab == "Trending":
-        query = query.limit(20)
+        # Engagement-based trending: rank the last 3 days' articles by how
+        # many users actually read them (global read counts), with recency
+        # as the tie-breaker. Articles nobody has read yet still appear,
+        # ordered newest-first — same as before for a fresh launch.
+        read_counts = (
+            select(
+                UserNewsInteraction.news_id,
+                func.count(UserNewsInteraction.id).label("reads"),
+            )
+            .filter(UserNewsInteraction.is_read == True)
+            .group_by(UserNewsInteraction.news_id)
+            .subquery()
+        )
+        query = (
+            select(NewsArticle)
+            .outerjoin(read_counts, NewsArticle.id == read_counts.c.news_id)
+            .order_by(
+                desc(func.coalesce(read_counts.c.reads, 0)),
+                desc(NewsArticle.published_at),
+            )
+            .limit(20)
+        )
     elif category_tab in ["Tools", "AI Tools"]:
         query = query.filter(
             or_(
@@ -676,12 +697,16 @@ async def get_todays_lesson(
             takeaway_card = next(
                 (c for c in cards if c.get("cardType") == "takeaway"), None
             )
+            quiz_set_res = await db.execute(
+                select(QuizSet.id).filter(QuizSet.curriculum_lesson_id == lesson.id)
+            )
             return {
                 "title": lesson.title,
                 "content_blocks": cards,
                 "practical_takeaway": (
                     takeaway_card.get("bodyText") if takeaway_card else None
                 ),
+                "quiz_set_id": quiz_set_res.scalar(),
             }
 
     # Legacy snapshot sessions (or sessions without an assigned lesson)
@@ -711,10 +736,27 @@ async def get_todays_quiz(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """Today's quiz = the quiz authored for today's assigned curriculum lesson."""
     session = await get_or_create_daily_session(db, current_user.id)
 
-    if not session or not session.lesson_data:
-        raise HTTPException(status_code=404, detail="Today's quiz is not ready.")
+    lesson_id = (session.lesson_data or {}).get("curriculum_lesson_id") if session else None
+    if not lesson_id:
+        raise HTTPException(status_code=404, detail="Today's lesson (and quiz) is not ready.")
 
-    return session.lesson_data.get("quiz")
+    quiz_set_res = await db.execute(
+        select(QuizSet).filter(QuizSet.curriculum_lesson_id == lesson_id)
+    )
+    quiz_set = quiz_set_res.scalars().first()
+    if not quiz_set:
+        raise HTTPException(
+            status_code=404,
+            detail="No quiz has been authored for today's lesson yet.",
+        )
+
+    return {
+        "quiz_set_id": quiz_set.id,
+        "title": quiz_set.title,
+        "total_questions": quiz_set.total_questions,
+        "estimated_minutes": quiz_set.estimated_minutes,
+    }
  

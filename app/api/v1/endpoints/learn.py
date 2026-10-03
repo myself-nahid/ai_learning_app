@@ -14,7 +14,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.api.deps import get_db, get_current_user
-from app.db.models import User, UserProfile, LearningPath, Lesson, UserLessonProgress, WeeklyActivity, NewsArticle
+from app.db.models import User, UserProfile, LearningPath, Lesson, UserLessonProgress, WeeklyActivity, NewsArticle, QuizSet
 from app.services.session_service import get_or_create_daily_session
 from app.schemas.learn import (
     LearnDashboardResponse, PathDetailResponse, LessonContentResponse
@@ -787,12 +787,18 @@ async def get_learn_dashboard(
     level_res = await db.execute(
         select(UserProfile.ai_level).where(UserProfile.user_id == current_user.id)
     )
-    user_level = (level_res.scalar() or "Beginner") or "Beginner"
+    _raw_user_level = (level_res.scalar() or "").strip()
+    user_level = (_raw_user_level[:1].upper() + _raw_user_level[1:].lower()) or "Beginner"
     level_rank = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
     user_rank = level_rank.get(user_level, 1)
 
+    def _block_level(p: LearningPath) -> str:
+        raw = (p.level or "").strip()
+        return (raw[:1].upper() + raw[1:].lower()) if raw else ""
+
     def _block_sort_key(p: LearningPath):
-        return (level_rank.get(p.level or "", 1) < user_rank, level_rank.get(p.level or "", 1), p.id)
+        lvl = _block_level(p)
+        return (level_rank.get(lvl, 1) < user_rank, level_rank.get(lvl, 1), p.id)
 
     paths = sorted(paths, key=_block_sort_key)
 
@@ -811,8 +817,31 @@ async def get_learn_dashboard(
     ]
     active_progress = None
     if in_prog_candidates:
-        in_prog_candidates.sort(key=lambda x: x.last_accessed or datetime.min, reverse=True)
-        active_progress = in_prog_candidates[0]
+        # Park easier-band (revision) lessons: a user whose profile says
+        # Intermediate should not keep getting a half-finished Beginner
+        # lesson as "Continue Learning" just because they opened it once.
+        # Prefer in-progress lessons at the user's own level or harder;
+        # only fall back to easier ones when nothing else is in progress.
+        cand_ids = [p.lesson_id for p in in_prog_candidates]
+        lvl_rows_res = await db.execute(
+            select(Lesson.id, LearningPath.level)
+            .join(LearningPath, Lesson.path_id == LearningPath.id)
+            .where(Lesson.id.in_(cand_ids))
+        )
+        lvl_by_lesson = {row[0]: (row[1] or "") for row in lvl_rows_res.all()}
+
+        def _rank_of(raw: str) -> int:
+            lvl = (raw or "").strip()
+            lvl = (lvl[:1].upper() + lvl[1:].lower()) if lvl else ""
+            return level_rank.get(lvl, 1)
+
+        same_or_harder = [
+            p for p in in_prog_candidates
+            if _rank_of(lvl_by_lesson.get(p.lesson_id, "")) >= user_rank
+        ]
+        pool = same_or_harder if same_or_harder else in_prog_candidates
+        pool.sort(key=lambda x: x.last_accessed or datetime.min, reverse=True)
+        active_progress = pool[0]
 
     continue_learning = None
     if active_progress:
@@ -842,6 +871,16 @@ async def get_learn_dashboard(
                     break
             if continue_learning:
                 break
+
+    # Attach the authored lesson quiz (if any) so Daily Pulse can route the
+    # quiz stage to real curriculum content instead of a hardcoded quiz set.
+    if continue_learning:
+        lesson_quiz_res = await db.execute(
+            select(QuizSet.id).filter(QuizSet.curriculum_lesson_id == continue_learning["lesson_id"])
+        )
+        lesson_quiz_set_id = lesson_quiz_res.scalar()
+        if lesson_quiz_set_id:
+            continue_learning["quiz_set_id"] = lesson_quiz_set_id
 
     # ── Learning Paths (deduplicated by unique topic/image) ────────────────
     learning_paths = []
@@ -1107,9 +1146,16 @@ async def get_lesson_content(
     normalized = _normalize_lesson_cards(lesson_cards_data, lesson_title)
     total_cards = len(normalized)
 
+    # Authored lesson quiz (if any) so the runner can chain into it
+    lesson_quiz_res = await db.execute(
+        select(QuizSet.id).filter(QuizSet.curriculum_lesson_id == lesson_id)
+    )
+    lesson_quiz_set_id = lesson_quiz_res.scalar()
+
     return {
         "lesson_id": lesson_id,
         "path_id": lesson_path_id,
+        "quiz_set_id": lesson_quiz_set_id,
         "title": lesson_title,
         "estimated_minutes": lesson_estimated_minutes,
         "total_cards": total_cards,

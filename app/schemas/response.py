@@ -50,6 +50,8 @@ class DailyLessonResponse(BaseModel):
     title: Optional[str]
     content_blocks: Optional[Any]
     practical_takeaway: Optional[str]
+    # QuizSet authored for this lesson (None when the lesson has no quiz yet)
+    quiz_set_id: Optional[int] = None
 
 
 class LegalPageResponse(BaseModel):

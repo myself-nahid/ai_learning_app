@@ -20,6 +20,8 @@ class ContinueLearningSchema(BaseModel):
     progress_percentage: Optional[int] = 0
     minutes_remaining: Optional[int] = 5
     image_url: Optional[str] = None
+    # Authored lesson quiz (QuizSet id) when this lesson has one — Daily Pulse routes here
+    quiz_set_id: Optional[int] = None
 
 
 class PathCardSchema(BaseModel):
@@ -74,6 +76,7 @@ class PathDetailResponse(BaseModel):
 class LessonContentResponse(BaseModel):
     lesson_id: int
     path_id: Optional[int] = None
+    quiz_set_id: Optional[int] = None
     title: str
     estimated_minutes: int
     total_cards: Optional[int] = None
