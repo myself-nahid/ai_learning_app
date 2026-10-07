@@ -646,6 +646,7 @@ def _serialize_lesson(
         estimated_minutes=l.estimated_minutes or 5,
         cards_data=cards if include_cards else [],
         card_count=len(cards),
+        quiz_count=(len(l.quiz_data) if isinstance(l.quiz_data, list) else 0),
         quiz_data=(l.quiz_data if isinstance(l.quiz_data, list) else None) if include_cards else None,
     )
 
@@ -840,69 +841,24 @@ def _validate_quiz_questions(questions: List[dict]) -> List[dict]:
     return cleaned
 
 
+async def _delete_quiz_sets_for_lessons(db: AsyncSession, lesson_ids: list) -> None:
+    """Remove the QuizSet (+ its questions) authored for the given lessons.
+
+    Prevents orphan quiz sets that would otherwise keep serving a deleted
+    lesson's quiz in the app (quiz sets are looked up by curriculum_lesson_id).
+    """
+    from app.services.lesson_quiz_service import delete_quiz_sets_for_lessons
+    await delete_quiz_sets_for_lessons(db, lesson_ids)
+
 async def _sync_lesson_quiz_set(db: AsyncSession, lesson: Lesson) -> Optional[int]:
     """Create/update (or remove) the QuizSet linked to a curriculum lesson.
 
     The linked QuizSet is what the mobile app already knows how to serve,
     score, and award XP for (POST /quiz-tab/start/{id} etc.).
     """
-    path_res = await db.execute(select(LearningPath).filter(LearningPath.id == lesson.path_id))
-    path = path_res.scalars().first()
+    from app.services.lesson_quiz_service import sync_lesson_quiz_set
+    return await sync_lesson_quiz_set(db, lesson)
 
-    qs_res = await db.execute(select(QuizSet).filter(QuizSet.curriculum_lesson_id == lesson.id))
-    quiz_set = qs_res.scalars().first()
-
-    questions = lesson.quiz_data if isinstance(lesson.quiz_data, list) else []
-    if not questions:
-        if quiz_set:
-            # Quiz cleared — remove questions + set so the app stops serving it
-            old_q_res = await db.execute(
-                select(QuizQuestion).filter(QuizQuestion.quiz_set_id == quiz_set.id)
-            )
-            for old_q in old_q_res.scalars().all():
-                await db.delete(old_q)
-            await db.delete(quiz_set)
-        return None
-
-    level = (path.level if path else None) or "Beginner"
-    title = f"Lesson Quiz: {(lesson.title or 'Lesson')[:70]}"
-    est_minutes = max(2, int(len(questions) * 1.5))
-    xp_reward = 10 + len(questions) * 2
-
-    if not quiz_set:
-        quiz_set = QuizSet(
-            category="Curriculum",
-            title=title,
-            description=(lesson.learning_goal or f"Check your understanding of '{lesson.title}'.")[:300],
-            level=level,
-            total_questions=len(questions),
-            estimated_minutes=est_minutes,
-            xp_reward=xp_reward,
-            curriculum_lesson_id=lesson.id,
-        )
-        db.add(quiz_set)
-        await db.flush()
-    else:
-        quiz_set.title = title
-        quiz_set.level = level
-        quiz_set.total_questions = len(questions)
-        quiz_set.estimated_minutes = est_minutes
-        quiz_set.xp_reward = xp_reward
-        old_q_res = await db.execute(
-            select(QuizQuestion).filter(QuizQuestion.quiz_set_id == quiz_set.id)
-        )
-        for old_q in old_q_res.scalars().all():
-            await db.delete(old_q)
-        await db.flush()
-
-    for q in questions:
-        db.add(QuizQuestion(
-            quiz_set_id=quiz_set.id,
-            question_text=q["question_text"],
-            options=q["options"],
-            correct_option_key=q["correct_option_key"],
-        ))
-    return quiz_set.id
 
 
 @router.get("/curriculum/lessons/{lesson_id}/quiz")
@@ -976,6 +932,7 @@ async def bulk_delete_curriculum_lessons(
             UserLessonProgress.lesson_id.in_(data.lesson_ids)
         )
     )
+    await _delete_quiz_sets_for_lessons(db, list(data.lesson_ids))
     for l in lessons:
         await db.delete(l)
 
@@ -1240,7 +1197,11 @@ async def delete_curriculum_path(
         raise HTTPException(status_code=404, detail="Path not found")
 
     path_title = path.title
-    # Delete child lessons first
+    # Delete child lessons, their progress and their authored quizzes first
+    lesson_ids_res = await db.execute(select(Lesson.id).filter(Lesson.path_id == path_id))
+    path_lesson_ids = [row[0] for row in lesson_ids_res.all()]
+    if path_lesson_ids:
+        await _delete_quiz_sets_for_lessons(db, path_lesson_ids)
     await db.execute(Lesson.__table__.delete().where(Lesson.path_id == path_id))
     await db.execute(UserLessonProgress.__table__.delete().where(UserLessonProgress.path_id == path_id))
     await db.delete(path)
@@ -1281,6 +1242,11 @@ async def bulk_delete_curriculum_paths(
         deleted_lessons += len(path_lessons)
         titles.append(path.title)
 
+        path_lesson_ids_res = await db.execute(select(Lesson.id).filter(Lesson.path_id == path.id))
+        if path_lesson_ids_res:
+            await _delete_quiz_sets_for_lessons(
+                db, [row[0] for row in path_lesson_ids_res.all()]
+            )
         await db.execute(
             UserLessonProgress.__table__.delete().where(
                 UserLessonProgress.path_id == path.id
@@ -1420,10 +1386,11 @@ async def delete_curriculum_lesson(
     lesson_title = lesson.title
     path_id = lesson.path_id
 
-    # Clean up progress
+    # Clean up progress and the authored quiz (linked QuizSet + questions)
     await db.execute(
         UserLessonProgress.__table__.delete().where(UserLessonProgress.lesson_id == lesson_id)
     )
+    await _delete_quiz_sets_for_lessons(db, [lesson_id])
     await db.delete(lesson)
 
     # Update path totals and re-sequence remaining lessons 1..N in their

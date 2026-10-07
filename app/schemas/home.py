@@ -1,6 +1,13 @@
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
+class TodayLessonInfo(BaseModel):
+    lesson_id: int
+    path_id: Optional[int] = None
+    title: Optional[str] = None
+    quiz_set_id: Optional[int] = None
+
+
 class DailyPulseSchema(BaseModel):
     activities_completed: int
     total_activities: int = 5
@@ -9,6 +16,9 @@ class DailyPulseSchema(BaseModel):
     check_news: bool
     check_lesson: bool
     check_quiz: bool
+    # Today's assigned curriculum lesson (for the hero CTA routing);
+    # absent while the worker has not assigned a lesson yet.
+    today_lesson: Optional[TodayLessonInfo] = None
 
 
 class NewsCardSchema(BaseModel):

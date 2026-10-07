@@ -110,6 +110,8 @@ class CurriculumLessonItem(BaseModel):
     # Number of cards on this lesson. Always present; lets the admin list view
     # stay light (cards_data empty) without extra round-trips.
     card_count: int = 0
+    # Number of admin-authored quiz questions on this lesson (0 = no quiz).
+    quiz_count: int = 0
     # Only populated on the single-lesson detail endpoint (light list payloads omit it)
     quiz_data: Optional[List[dict]] = None
 

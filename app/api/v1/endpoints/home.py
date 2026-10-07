@@ -17,7 +17,13 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db, get_current_user
 from app.db.models import User, NewsArticle, UserNewsInteraction, DailySession, Notification, Lesson, QuizSet
-from app.schemas.home import HomeDashboardResponse, NewsCardResponse, NewsDetailResponse
+from app.schemas.home import (
+    DailyPulseSchema,
+    HomeDashboardResponse,
+    NewsCardResponse,
+    NewsDetailResponse,
+    TodayLessonInfo,
+)
 from app.schemas.response import (
     BookmarkToggleResponse,
     DailyLessonResponse,
@@ -91,18 +97,36 @@ async def get_home_dashboard(
     # news_completed tracks up to 3. Lesson and Quiz are 1 each. Total = 5.
     completed = session.news_completed + (1 if session.lesson_completed else 0) + (1 if session.quiz_completed else 0)
 
-    pulse_data = {
-        "activities_completed": completed,
-        "total_activities": 5,
-        "progress_percentage": int((completed / 5) * 100),
-        "estimated_time_left": f"{max(0, math.ceil(8.0 - (completed * 1.6))):.1f} min left",
-        "check_news": session.news_completed >= 3,
-        "check_lesson": session.lesson_completed,
-        "check_quiz": session.quiz_completed,
-        "news_completed": session.news_completed,
-        "lesson_completed": session.lesson_completed,
-        "quiz_completed": session.quiz_completed,
-    }
+    pulse_data = DailyPulseSchema(
+        activities_completed=completed,
+        total_activities=5,
+        progress_percentage=int((completed / 5) * 100),
+        estimated_time_left=f"{max(0, math.ceil(8.0 - (completed * 1.6))):.1f} min left",
+        check_news=session.news_completed >= 3,
+        check_lesson=session.lesson_completed,
+        check_quiz=session.quiz_completed,
+        news_completed=session.news_completed,
+        lesson_completed=session.lesson_completed,
+        quiz_completed=session.quiz_completed,
+    )
+
+    # Expose today's assigned lesson so the hero CTA can route straight into the
+    # runner (no dashboard round-trip) and show a meaningful label instead of a
+    # generic fallback when the worker has not assigned anything yet.
+    assigned_lesson_id = (session.lesson_data or {}).get("curriculum_lesson_id") if session else None
+    if assigned_lesson_id:
+        assigned_lesson_res = await db.execute(select(Lesson).filter(Lesson.id == assigned_lesson_id))
+        assigned_lesson = assigned_lesson_res.scalars().first()
+        if assigned_lesson:
+            lesson_quiz_res = await db.execute(
+                select(QuizSet.id).filter(QuizSet.curriculum_lesson_id == assigned_lesson.id)
+            )
+            pulse_data.today_lesson = TodayLessonInfo(
+                lesson_id=assigned_lesson.id,
+                path_id=assigned_lesson.path_id,
+                title=assigned_lesson.title,
+                quiz_set_id=lesson_quiz_res.scalar(),
+            )
 
     # 3. FETCH NEWS FEED (Based on Tabs)
     # Get user profile to know their interests for the 'For You' tab

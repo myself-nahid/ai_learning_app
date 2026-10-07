@@ -41,6 +41,9 @@ async def ensure_db_columns():
         await conn.execute(text(
             "ALTER TABLE quiz_sets ADD COLUMN IF NOT EXISTS curriculum_lesson_id INTEGER"
         ))
+        await conn.execute(text(
+            "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS explanation VARCHAR"
+        ))
     logger.info("Schema columns check complete.")
 
 
@@ -825,9 +828,13 @@ async def init_db():
     # One-time heal: topic-materialized paths were historically created with
     # source_type="curriculum", which leaked headline-like topics into the
     # Learning Feed, the daily lesson assignment, and the admin lesson editor.
-    # True Excel blocks always have the slug prefix "excel-block-".
+    # True curriculum blocks: either Excel (slug prefix "excel-block-") or an
+    # admin-created block (carries a unique curriculum_slug). Anything else
+    # that claims source_type="curriculum" is legacy junk (e.g. slugless news
+    # paths created before the column had a default) — reclassify to news so
+    # they only feed the Daily Pulse news pipeline.
     try:
-        from sqlalchemy import update
+        from sqlalchemy import update, or_
         from app.db.models import LearningPath as _LP
         from app.db.session import SessionLocal as _SL
         async with _SL() as db:
@@ -835,8 +842,10 @@ async def init_db():
                 update(_LP)
                 .where(
                     _LP.source_type == "curriculum",
-                    _LP.curriculum_slug.isnot(None),
-                    ~_LP.curriculum_slug.like("excel-block-%"),
+                    or_(
+                        _LP.curriculum_slug.is_(None),
+                        ~_LP.curriculum_slug.like("excel-block-%"),
+                    ),
                 )
                 .values(source_type="news")
             )

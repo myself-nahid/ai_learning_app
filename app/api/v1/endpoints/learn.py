@@ -440,6 +440,13 @@ async def _ensure_news_learning_path(
     }
 
 
+_BULLET_PREFIX_RE = re.compile(r"^[•\-*]\s*")
+
+
+def _strip_bullet_marker(line: str) -> str:
+    return _BULLET_PREFIX_RE.sub("", line.strip()).strip()
+
+
 def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> List[Dict[str, Any]]:
     if isinstance(cards_data, str):
         try:
@@ -481,6 +488,53 @@ def _normalize_lesson_cards(cards_data: Any, lesson_title: str = "Lesson") -> Li
                     example_data["practiceExercise"] = practice
                     card["bodyText"] = body
                     card["exampleData"] = example_data
+
+                # Takeaway card: guarantee the structured remember-fields exist
+                # (Excel-imported lessons carry takeawayData; admin-authored or
+                # legacy lesson cards hold everything inside bodyText). The
+                # runner renders Key Takeaways / Golden Rule / Next Step as
+                # separate sections from these fields when present.
+                if card.get("cardType") == "takeaway" and not isinstance(card.get("takeawayData"), dict):
+                    removed = {_REMEMBER_HEADER.lower() for _REMEMBER_HEADER in (
+                        "Key Takeaways", "Golden Rule", "Next Step",
+                    )}
+                    lines = str(card.get("bodyText") or "").replace("\r\n", "\n").split("\n")
+                    bullets: List[str] = []
+                    golden_rule = ""
+                    next_step = ""
+                    idx2 = 0
+                    while idx2 < len(lines):
+                        stripped = lines[idx2].strip()
+                        low = stripped.lower()
+                        if low in removed:
+                            kind = low
+                            idx2 += 1
+                            buf: List[str] = []
+                            while idx2 < len(lines):
+                                follow = lines[idx2].strip()
+                                if follow.lower() in removed:
+                                    break
+                                if follow:
+                                    buf.append(_strip_bullet_marker(follow))
+                                idx2 += 1
+                            if kind == "key takeaways":
+                                bullets = buf
+                            elif kind == "golden rule":
+                                golden_rule = " ".join(buf)
+                            else:
+                                next_step = " ".join(buf)
+                            continue
+                        idx2 += 1
+                    if bullets and golden_rule and next_step:
+                        card = {
+                            **card,
+                            "bodyText": "\n".join(bullets),
+                            "takeawayData": {
+                                "keyTakeaways": bullets,
+                                "goldenRule": golden_rule,
+                                "nextStep": next_step,
+                            },
+                        }
 
                 # Curriculum cards (intro/concept/example/takeaway) — pass through as-is.
                 normalized_cards.append(card)
@@ -817,18 +871,29 @@ async def get_learn_dashboard(
     ]
     active_progress = None
     if in_prog_candidates:
+        # Continue Learning must stay inside the predefined curriculum.
+        # News-derived lessons (paths with source_type="news") used to leak
+        # in here whenever the user had merely opened one, hijacking the
+        # Daily Pulse learning stage with headline content. Restrict the
+        # candidate pool to lessons on source_type="curriculum" paths.
+        cand_ids = [p.lesson_id for p in in_prog_candidates]
+        cur_rows_res = await db.execute(
+            select(Lesson.id, LearningPath.level)
+            .join(LearningPath, Lesson.path_id == LearningPath.id)
+            .where(
+                Lesson.id.in_(cand_ids),
+                LearningPath.source_type == "curriculum",
+            )
+        )
+        lvl_by_lesson = {row[0]: (row[1] or "") for row in cur_rows_res.all()}
+        in_prog_candidates = [
+            p for p in in_prog_candidates if p.lesson_id in lvl_by_lesson
+        ]
         # Park easier-band (revision) lessons: a user whose profile says
         # Intermediate should not keep getting a half-finished Beginner
         # lesson as "Continue Learning" just because they opened it once.
         # Prefer in-progress lessons at the user's own level or harder;
         # only fall back to easier ones when nothing else is in progress.
-        cand_ids = [p.lesson_id for p in in_prog_candidates]
-        lvl_rows_res = await db.execute(
-            select(Lesson.id, LearningPath.level)
-            .join(LearningPath, Lesson.path_id == LearningPath.id)
-            .where(Lesson.id.in_(cand_ids))
-        )
-        lvl_by_lesson = {row[0]: (row[1] or "") for row in lvl_rows_res.all()}
 
         def _rank_of(raw: str) -> int:
             lvl = (raw or "").strip()
@@ -913,6 +978,7 @@ async def get_learn_dashboard(
             "path_id": p.id,
             "title": p.title,
             "level": p.level or "Beginner",
+            "source_type": p.source_type or "curriculum",
             "total_lessons": actual_total_lessons,
             "total_minutes": total_mins,
             "progress_percentage": progress_pct,
@@ -975,6 +1041,7 @@ async def get_learn_dashboard(
             "title": target_lesson.title,
             "description": target_lesson.description or p.description,
             "level": p.level or "Beginner",
+            "source_type": p.source_type or "curriculum",
             "category": _clean_category_name(p.title),
             "image_url": p.image_url,
             "duration": f"{duration_mins} min",
@@ -1058,6 +1125,7 @@ async def get_path_details(
     return {
         "path_id": path.id, "title": path.title, "description": path.description,
         "level": path.level, "progress_percentage": progress_pct,
+        "source_type": path.source_type or "curriculum",
         "lessons": formatted_lessons,
     }
 

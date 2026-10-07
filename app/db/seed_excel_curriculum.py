@@ -34,6 +34,7 @@ COL_HOW_DOES_IT_WORK = 8
 COL_REAL_EXAMPLE = 9
 COL_PRACTICE_EXERCISE = 10
 COL_WHAT_SHOULD_I_REMEMBER = 11
+COL_QUIZ = 13
 
 
 def _str(val) -> str:
@@ -104,9 +105,32 @@ def _build_lesson_cards(row_data: dict) -> list[dict]:
     return cards
 
 
+def _load_workbook_bytes() -> bytes:
+    """Read the curriculum workbook bytes, with the historical path fallbacks:
+    module-relative path first, then CWD (container deployments copy the file
+    next to the working directory)."""
+    if EXCEL_PATH.exists():
+        return EXCEL_PATH.read_bytes()
+    cwd_path = Path(os.getcwd()) / "TodAI_Lessons_1-98 Optimized.xlsx"
+    if cwd_path.exists():
+        return cwd_path.read_bytes()
+    logger.warning(
+        "Excel curriculum file not found at %s (nor CWD fallback %s).",
+        EXCEL_PATH,
+        cwd_path,
+    )
+    raise FileNotFoundError(str(EXCEL_PATH))
+
+
 def parse_excel_curriculum() -> list[dict]:
     """
-    Parse the Excel file and return a list of lesson dicts grouped by block.
+    Parse the Excel file into the shared importer's lesson-dict shape.
+
+    Parsing (cards, quiz column, remember-card restructuring, cell cleaning)
+    lives in app.services.excel_import_service, so the startup seeder, the
+    admin Excel upload endpoint, and the import script always produce
+    identical cards and quiz data.
+
     Returns: [
       {
         "block_number": 1,
@@ -115,79 +139,28 @@ def parse_excel_curriculum() -> list[dict]:
         "lesson_title": "Your First Real Task With AI",
         "level": "Beginner",
         "learning_goal": "...",
-        "cards": [...],
+        "cards": [...],          # 4 fixed cards (quiz + structured takeaway)
+        "quiz": [...],           # Lesson.quiz_data (absent when no quiz cell)
+        "takeaway_data": {...},  # keyTakeaways / goldenRule / nextStep
       },
       ...
     ]
     """
+    from app.services.excel_import_service import parse_uploaded_workbook
+
+    # The shared importer parses raw bytes; resolve the workbook path exactly
+    # like before (module location first, then CWD fallback for containers).
     try:
-        import openpyxl
-    except ImportError:
-        logger.error(
-            "openpyxl is not installed. Cannot seed Excel curriculum. "
-            "Run: pip install openpyxl"
+        raw_bytes = _load_workbook_bytes()
+    except FileNotFoundError:
+        logger.warning(
+            "Excel curriculum file not found. Skipping Excel curriculum parsing."
         )
         return []
 
-    excel_path = EXCEL_PATH
-    if not excel_path.exists():
-        # Try relative from current working directory
-        cwd_path = Path(os.getcwd()) / "TodAI_Lessons_1-98 Optimized.xlsx"
-        if cwd_path.exists():
-            excel_path = cwd_path
-        else:
-            logger.warning(
-                "Excel curriculum file not found at %s. Skipping Excel seeding.",
-                excel_path,
-            )
-            return []
-
-    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
-    ws = wb.active
-
-    lessons = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        block_num = row[COL_BLOCK_NUM - 1]
-        block_title = row[COL_BLOCK_TITLE - 1]
-        lesson_num = row[COL_LESSON_NUM - 1]
-        lesson_title = row[COL_LESSON_TITLE - 1]
-        level = row[COL_LEVEL - 1]
-        learning_goal = row[COL_LEARNING_GOAL - 1]
-        what_is_it = row[COL_WHAT_IS_IT - 1]
-        how_does_it_work = row[COL_HOW_DOES_IT_WORK - 1]
-        real_example = row[COL_REAL_EXAMPLE - 1]
-        practice_exercise = row[COL_PRACTICE_EXERCISE - 1]
-        what_should_remember = row[COL_WHAT_SHOULD_I_REMEMBER - 1]
-
-        # Skip empty rows
-        if not lesson_title:
-            continue
-
-        row_data = {
-            "what_is_it": what_is_it,
-            "how_does_it_work": how_does_it_work,
-            "real_example": real_example,
-            "practice_exercise": practice_exercise,
-            "what_should_remember": what_should_remember,
-        }
-
-        cards = _build_lesson_cards(row_data)
-
-        lessons.append(
-            {
-                "block_number": block_num,
-                "block_title": _str(block_title),
-                "lesson_number": int(lesson_num) if lesson_num else 0,
-                "lesson_title": _str(lesson_title),
-                "level": _str(level).strip(),
-                "learning_goal": _str(learning_goal),
-                "cards": cards,
-            }
-        )
-
-    wb.close()
-    logger.info("Parsed %d lessons from Excel curriculum.", len(lessons))
-    return lessons
+    parsed = parse_uploaded_workbook(raw_bytes)
+    logger.info("Parsed %d lessons from Excel curriculum.", len(parsed))
+    return parsed
 
 
 async def seed_excel_learning_paths(db_session_factory) -> None:
@@ -285,9 +258,31 @@ async def seed_excel_learning_paths(db_session_factory) -> None:
                 lesson.estimated_minutes = 5
                 lesson.cards_data = cards
 
+        # Mirror every lesson's authored quiz into QuizSet/QuizQuestion so the
+        # Daily Pulse quiz stage keeps working after restarts.
+        from app.services.lesson_quiz_service import sync_lesson_quiz_set
+
+        all_db_lessons_res = await db.execute(
+            select(Lesson)
+            .join(LearningPath, Lesson.path_id == LearningPath.id)
+            .where(LearningPath.curriculum_slug.like("excel-block-%"))
+        )
+        synced = 0
+        for db_lesson in all_db_lessons_res.scalars().all():
+            try:
+                await sync_lesson_quiz_set(db, db_lesson)
+                synced += 1
+            except Exception as e:  # noqa: BLE001 — keep seeding alive
+                logger.warning(
+                    "Quiz sync failed for lesson %s ('%s'): %s",
+                    db_lesson.id, db_lesson.title, e,
+                )
+
         await db.commit()
         logger.info(
-            "Excel curriculum seeding complete: %d blocks, %d total lessons.",
+            "Excel curriculum seeding complete: %d blocks, %d total lessons, "
+            "%d quiz sync checks.",
             len(blocks),
             len(lessons),
+            synced,
         )

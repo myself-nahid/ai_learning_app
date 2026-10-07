@@ -226,6 +226,9 @@ class QuizQuestion(Base):
     # JSON containing {"A": "Anna", "B": "Marek", "C": "Zofia", "D": "None of them"}
     options = Column(JSON, nullable=False) 
     correct_option_key = Column(String, nullable=False) # e.g., "A"
+    # Optional why-this-answer note authored with the lesson quiz in Excel or
+    # via the bashboard. Additive column; NULL for pre-existing questions.
+    explanation = Column(String, nullable=True)
     
     quiz_set = relationship("QuizSet", back_populates="questions")
 
