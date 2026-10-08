@@ -245,6 +245,7 @@ async def seed_excel_learning_paths(db_session_factory) -> None:
                 )
                 lesson = lesson_res.scalars().first()
 
+                created = not lesson
                 if not lesson:
                     lesson = Lesson(
                         path_id=path.id,
@@ -257,6 +258,12 @@ async def seed_excel_learning_paths(db_session_factory) -> None:
                 lesson.learning_goal = learning_goal
                 lesson.estimated_minutes = 5
                 lesson.cards_data = cards
+                # Excel-authored quiz: adopt it on create, and backfill existing
+                # lessons that never had one (quiz_data NULL). An explicit admin
+                # clear stores [] and stays cleared across restarts; a non-empty
+                # DB value (admin edit) also wins over the file.
+                if lesson_data.get("quiz") and (created or lesson.quiz_data is None):
+                    lesson.quiz_data = lesson_data["quiz"]
 
         # Mirror every lesson's authored quiz into QuizSet/QuizQuestion so the
         # Daily Pulse quiz stage keeps working after restarts.

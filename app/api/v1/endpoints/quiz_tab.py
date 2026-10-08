@@ -578,6 +578,7 @@ async def get_quiz_questions(
             "question_text": q.question_text,
             "options": q.options,
             "correct_option_key": q.correct_option_key,
+            "explanation": q.explanation,
         }
         for q in q_set.questions
     ]
@@ -623,6 +624,7 @@ async def start_quiz(
             "question_text": q.question_text,
             "options": q.options,
             "correct_option_key": q.correct_option_key,
+            "explanation": q.explanation,
         }
         for q in q_set.questions
     ]
@@ -682,7 +684,8 @@ async def submit_quiz(
                 question_text=q.question_text,
                 is_correct=is_cor,
                 user_answer=q.options.get(u_ans, ""),
-                correct_answer=q.options.get(q.correct_option_key, "")
+                correct_answer=q.options.get(q.correct_option_key, ""),
+            explanation=q.explanation
             ))
         mins, secs = divmod(attempt.duration_seconds or 0, 60)
         return QuizResultResponse(
@@ -712,7 +715,8 @@ async def submit_quiz(
             question_text=q.question_text,
             is_correct=is_correct,
             user_answer=q.options.get(answer.selected_option_key, ""),
-            correct_answer=q.options.get(q.correct_option_key, "")
+            correct_answer=q.options.get(q.correct_option_key, ""),
+            explanation=q.explanation
         ))
 
     # 3. Update Attempt Record
@@ -776,7 +780,7 @@ async def submit_quiz(
         review=review_items
     )
 
-@router.post("/test/seed-quiz-data", response_model=MessageResponse)
+@router.post("/test/seed-quiz-data", response_model=MessageResponse, include_in_schema=False)
 async def seed_quiz_data(db: AsyncSession = Depends(get_db)):
     # 1. Create the Quiz Set (Matches UI Screen 2)
     q_set = QuizSet(

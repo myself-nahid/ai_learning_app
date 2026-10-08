@@ -152,7 +152,9 @@ async def send_test_push_notification(
         image_url = top_article.image_url or f"{settings.BASE_URL.rstrip('/')}/static/logo.png"
         first_id = str(top_article.id)
     else:
-        article_ids_str = "3,4,6"
+        # No articles yet — omit briefingIds entirely; the app resolves today's
+        # real articles from the dashboard on tap instead of fabricating ids.
+        article_ids_str = ""
         title = "Your daily AI briefing is ready."
         body = "3 stories. 5 minutes."
         image_url = f"{settings.BASE_URL.rstrip('/')}/static/logo.png"

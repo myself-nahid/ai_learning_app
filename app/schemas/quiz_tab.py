@@ -68,6 +68,7 @@ class ReviewItemSchema(BaseModel):
     is_correct: bool
     user_answer: str
     correct_answer: str
+    explanation: Optional[str] = None
 
 class QuizResultResponse(BaseModel):
     score_percentage: int

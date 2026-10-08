@@ -342,18 +342,26 @@ import pytz
 from app.services.notification_service import send_push_notification
 
 
-async def _send_user_daily_reminder(user):
+async def _send_user_daily_reminder(user, assigned_news_ids=None):
     if not user.fcm_token:
         return None
+    data_payload = {
+        "briefing": True,
+        "screen": "daily_briefing_sequence",
+        "action": "start",
+    }
+    # Include today's assigned article ids so a tap deep-links straight into the
+    # correct 3-article briefing without a dashboard round-trip (the app falls
+    # back to fetching them dynamically when this key is absent).
+    if assigned_news_ids:
+        data_payload["briefingIds"] = ",".join(
+            str(int(n)) for n in assigned_news_ids[:3] if str(n).strip().isdigit()
+        )
     await send_push_notification(
         token=user.fcm_token,
         title="Your Daily Pulse is Ready! ⚡",
         body="Tap to complete today's 5-minute AI briefing and keep your streak alive.",
-        data_payload={
-            "briefing": True,
-            "screen": "daily_briefing_sequence",
-            "action": "start",
-        },
+        data_payload=data_payload,
     )
     return None
 
@@ -385,4 +393,17 @@ async def send_reminders_async():
                 current_time_in_user_tz.hour == user_reminder_time.hour
                 and current_time_in_user_tz.minute == user_reminder_time.minute
             ):
-                await _send_user_daily_reminder(user)
+                # Today's assigned news (if the worker already created the
+                # session) rides along in the tap payload.
+                sess_res = await db.execute(
+                    select(DailySession)
+                    .filter(DailySession.user_id == user.id)
+                    .order_by(DailySession.date.desc())
+                    .limit(1)
+                )
+                todays_session = sess_res.scalars().first()
+                assigned_ids = (
+                    (todays_session.assigned_news_ids or [])
+                    if todays_session else []
+                )
+                await _send_user_daily_reminder(user, assigned_ids)
