@@ -21,7 +21,7 @@ from app.db.models import (
     UserConceptProgress,
     UserLessonProgress,
 )
-from app.services.news_service import fetch_raw_ai_news
+from app.services.news_service import fetch_raw_ai_news, _normalize_article_identity
 from app.services.ai_service import transform_news_to_todai_format
 
 logger = logging.getLogger(__name__)
@@ -169,26 +169,72 @@ async def process_real_daily_pulse_for_all_users():
                         user.id,
                     )
 
-                # ── 3. Transform up to 3 articles into TodAI format ─────────
-                article_batch = []
+                # ── 3. Transform up to 3 articles into TodAI format ─────────────
+                # Dedupe against the DB: NewsAPI's top results can stay static
+                # for days, which would repeat the exact same 3 stories. Fresh
+                # headlines only — existing headlines (normalized) are skipped.
+                existing_headlines_res = await db.execute(select(NewsArticle.headline))
+                existing_headlines = {
+                    _normalize_article_identity(h)
+                    for h in existing_headlines_res.scalars().all()
+                    if h
+                }
 
-                for source_article in raw_articles[:3]:
-                    ai_news_data = await transform_news_to_todai_format(source_article, topic.category)
-                    new_article = NewsArticle(
-                        headline=ai_news_data.get("headline", source_article.get("title", "")),
-                        summary=ai_news_data.get("summary", source_article.get("description", "")),
-                        tag=ai_news_data.get("tag", topic.category),
-                        category=topic.category,
-                        content_blocks=ai_news_data.get("content_blocks", []),
-                        image_url=source_article.get("urlToImage"),
-                        publisher=source_article.get("source", {}).get("name"),
-                        original_url=source_article.get("url"),
-                        read_time_minutes=ai_news_data.get("read_time_minutes", 3),
-                        published_at=datetime.utcnow(),
+                article_batch = []
+                seen_keys: set[str] = set()
+
+                async def _collect_fresh(candidates):
+                    """Fill article_batch from candidates, skipping anything the
+                    user has already seen (existing DB headlines)."""
+                    for source_article in candidates:
+                        if len(article_batch) >= 3:
+                            break
+                        _raw_title = source_article.get("title") or ""
+                        _raw_url = source_article.get("url") or ""
+                        _dedupe_key = (
+                            _normalize_article_identity(_raw_title)
+                            or _normalize_article_identity(_raw_url)
+                        )
+                        if (
+                            not _dedupe_key
+                            or _dedupe_key in seen_keys
+                            or _dedupe_key in existing_headlines
+                        ):
+                            continue
+                        seen_keys.add(_dedupe_key)
+
+                        ai_news_data = await transform_news_to_todai_format(
+                            source_article, topic.category
+                        )
+                        new_article = NewsArticle(
+                            headline=ai_news_data.get("headline", source_article.get("title", "")),
+                            summary=ai_news_data.get("summary", source_article.get("description", "")),
+                            tag=ai_news_data.get("tag", topic.category),
+                            category=topic.category,
+                            content_blocks=ai_news_data.get("content_blocks", []),
+                            image_url=source_article.get("urlToImage"),
+                            publisher=source_article.get("source", {}).get("name"),
+                            original_url=source_article.get("url"),
+                            read_time_minutes=ai_news_data.get("read_time_minutes", 3),
+                            published_at=datetime.utcnow(),
+                        )
+                        db.add(new_article)
+                        await db.flush()
+                        article_batch.append(new_article)
+
+                await _collect_fresh(raw_articles)
+                if len(article_batch) < 3:
+                    # Topic-specific results thin (after dedupe) — top up from
+                    # the broad AI feed so the day still serves 3 fresh stories.
+                    broad_raw = await fetch_raw_ai_news(
+                        '"artificial intelligence" OR AI OR "machine learning" OR OpenAI OR ChatGPT OR LLM'
                     )
-                    db.add(new_article)
-                    await db.flush()
-                    article_batch.append(new_article)
+                    await _collect_fresh(broad_raw)
+                if len(article_batch) < 3:
+                    logger.warning(
+                        "Only %d fresh articles for topic '%s' (user %d) after dedupe.",
+                        len(article_batch), topic.title, user.id,
+                    )
 
                 # ── 4. Assign the predefined lesson; news must not generate it ──
                 # Primary lookup: AiTopicCurriculum topics materialize a
@@ -203,9 +249,28 @@ async def process_real_daily_pulse_for_all_users():
                         LearningPath.source_type == "curriculum",
                     )
                     .order_by(Lesson.sequence_order)
-                    .limit(1)
                 )
-                curriculum_lesson = lesson_res.scalars().first()
+                topic_lessons = lesson_res.scalars().all()
+
+                # Pick the user's NEXT lesson in the topic path — not always the
+                # first one. Skipping completed lessons keeps the daily assigned
+                # lesson different each day instead of repeating lesson 1.
+                completed_rows_res = await db.execute(
+                    select(UserLessonProgress.lesson_id).where(
+                        UserLessonProgress.user_id == user.id,
+                        UserLessonProgress.status == "completed",
+                    )
+                )
+                _user_completed_ids = {r[0] for r in completed_rows_res.fetchall()}
+
+                curriculum_lesson = next(
+                    (les for les in topic_lessons if les.id not in _user_completed_ids),
+                    None,
+                )
+                if curriculum_lesson is None and topic_lessons:
+                    # Topic path fully completed — move on to view-progress semantics:
+                    # re-serve the final lesson (review stop) rather than lesson 1.
+                    curriculum_lesson = topic_lessons[-1]
 
                 if not curriculum_lesson:
                     # Fallback: assign the user's next uncompleted lesson from the

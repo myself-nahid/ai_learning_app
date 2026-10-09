@@ -70,7 +70,16 @@ class PathDetailResponse(BaseModel):
     description: str
     level: str
     progress_percentage: int
+    source_type: Optional[str] = "curriculum"
     lessons: List[LessonListItemSchema]
+    # Daily plan (default mode): the server serves the user's next sequential
+    # window of lessons (max 5) instead of the whole 20-30-lesson path.
+    daily_mode: bool = False
+    daily_start_order: Optional[int] = None
+    daily_lesson_ids: List[int] = []
+    path_total_lessons: int = 0
+    path_completed_lessons: int = 0
+    path_progress_percentage: int = 0
 
 
 class LessonContentResponse(BaseModel):

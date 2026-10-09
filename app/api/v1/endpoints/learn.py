@@ -1064,6 +1064,7 @@ async def get_learn_dashboard(
 @router.get("/paths/{path_id}", response_model=PathDetailResponse)
 async def get_path_details(
     path_id: int,
+    all: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1119,14 +1120,67 @@ async def get_path_details(
             "status": status,
         })
 
+    # ── Daily lesson window ───────────────────────────────────────────
+    # Daily follow structure: max 5 lessons per day per path, walked
+    # sequentially from the user's current position. The window ends early at
+    # a block-challenge lesson (title prefix "Block N Challenge"), which acts
+    # as the path's natural day boundary / review stop.
+    import re as _re
+
+    daily_start_idx = 0
+    for _i, lesson in enumerate(sorted_lessons):
+        prog = progress_map.get(lesson.id)
+        if not (prog and prog.status == "completed"):
+            daily_start_idx = _i
+            break
+    else:
+        daily_start_idx = len(sorted_lessons)  # everything completed
+
+    daily_end_idx = min(daily_start_idx + 5, len(sorted_lessons))
+    for _i in range(daily_start_idx + 1, daily_end_idx):
+        _title = (sorted_lessons[_i].title or "").strip()
+        if _re.match(r"^Block\s*\d+\s+Challenge", _title, _re.IGNORECASE):
+            daily_end_idx = _i
+            break
+
+    daily_lesson_ids = [
+        sorted_lessons[_i].id for _i in range(daily_start_idx, daily_end_idx)
+    ]
+
     total_lessons = len(sorted_lessons) or 1
     progress_pct = int((completed_count / total_lessons) * 100)
+
+    if not all:
+        # Daily mode (default): serve ONLY today's slice, keeping real
+        # sequence numbers so the UI can label them correctly.
+        daily_lessons = [l for l in formatted_lessons if l["lesson_id"] in daily_lesson_ids]
+        daily_completed = sum(1 for l in daily_lessons if l["status"] == "completed")
+        daily_pct = int((daily_completed / len(daily_lessons)) * 100) if daily_lessons else 0
+        return {
+            "path_id": path.id, "title": path.title, "description": path.description,
+            "level": path.level,
+            "progress_percentage": daily_pct,
+            "source_type": path.source_type or "curriculum",
+            "lessons": daily_lessons,
+            "daily_mode": True,
+            "daily_start_order": daily_lessons[0]["sequence_order"] if daily_lessons else None,
+            "daily_lesson_ids": daily_lesson_ids,
+            "path_total_lessons": total_lessons,
+            "path_completed_lessons": completed_count,
+            "path_progress_percentage": progress_pct,
+        }
 
     return {
         "path_id": path.id, "title": path.title, "description": path.description,
         "level": path.level, "progress_percentage": progress_pct,
         "source_type": path.source_type or "curriculum",
         "lessons": formatted_lessons,
+        "daily_mode": False,
+        "daily_start_order": None,
+        "daily_lesson_ids": daily_lesson_ids,
+        "path_total_lessons": total_lessons,
+        "path_completed_lessons": completed_count,
+        "path_progress_percentage": progress_pct,
     }
 
 # 3. START/RESUME LESSON (Screens 3-8)
